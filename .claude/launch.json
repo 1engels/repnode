@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "repnode-api",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@repnode/server", "dev"],
+      "port": 3210
+    },
+    {
+      "name": "repnode-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@repnode/web", "dev"],
+      "port": 5173
+    }
+  ]
+}
