@@ -76,7 +76,7 @@ for (const [k, c] of configs) {
     w.on('exit', () => resolve());
   })));
   const tExtract = performance.now() - t0;
-  const bytes = await assemble(dir, join(dir, 'out.csv'), tasks, columns, output);
+  const { bytes } = await assemble({ dir, outFile: join(dir, 'out.csv'), meters: tasks, columns, output, timezone: 'America/Lima', fileName: 'out.csv' });
   const ms = performance.now() - t0;
   console.log(`RepNode ${k} worker(s) × ${c} consultas: ${(ms / 1000).toFixed(1)} s · ${rows.toLocaleString('es')} filas CSV · ${mb(bytes)} · extracción ${(tExtract / 1000).toFixed(1)} s + ensamblado ${((ms - tExtract) / 1000).toFixed(1)} s · RSS máx ${mb(peakRss)}`);
   rmSync(dir, { recursive: true, force: true });

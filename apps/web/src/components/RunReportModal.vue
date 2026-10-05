@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { relativePresetLabels, resolveRange, type DateRange, type ReportDTO } from '@repnode/shared';
+import { FORMAT_LABELS, relativePresetLabels, resolveRange, type DateRange, type ReportDTO } from '@repnode/shared';
 import BaseModal from './BaseModal.vue';
 import DateRangeEditor from './DateRangeEditor.vue';
 import Icon from './Icon.vue';
@@ -80,7 +80,7 @@ function edit() {
         <div class="rounded-lg bg-slate-50 p-2"><dt class="text-xs text-slate-500">Medidores</dt><dd class="font-semibold">{{ formatNumber(meters) }}</dd></div>
         <div class="rounded-lg bg-slate-50 p-2"><dt class="text-xs text-slate-500">Mediciones</dt><dd class="font-semibold">{{ def.quantityIds.length }}</dd></div>
         <div class="rounded-lg bg-slate-50 p-2"><dt class="text-xs text-slate-500">Rango guardado</dt><dd class="font-semibold">{{ rangeLabel }}</dd></div>
-        <div class="rounded-lg bg-slate-50 p-2"><dt class="text-xs text-slate-500">Formato</dt><dd class="font-semibold">{{ def.output.format === 'zip' ? 'ZIP' : def.output.format === 'long' ? 'CSV largo' : 'CSV ancho' }}</dd></div>
+        <div class="rounded-lg bg-slate-50 p-2"><dt class="text-xs text-slate-500">Formato</dt><dd class="font-semibold">{{ FORMAT_LABELS[def.output.format] ?? FORMAT_LABELS.wide }}</dd></div>
       </dl>
 
       <div v-if="resolved" class="text-sm text-slate-700">

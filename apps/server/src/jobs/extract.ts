@@ -3,7 +3,7 @@ import type { ConnectionPool, Request } from 'mssql';
 import { LocalTimeFormatter, makeGrid, type OutputOptions, type TimeGrid } from '@repnode/shared';
 import { bindCommon, dataSql, READ_COMMITTED, READ_UNCOMMITTED } from '../mssql/queries.ts';
 import { BufferedWriter, CsvFormatter } from './csv.ts';
-import { BOM, headerLine, LongSink, WideSink, type QuantityColumn, type RowSink } from './formats.ts';
+import { BOM, headerLine, KeyedWideSink, LongSink, WideSink, type QuantityColumn, type RowSink } from './formats.ts';
 
 export interface ExtractContext {
   columns: QuantityColumn[];
@@ -55,7 +55,9 @@ export function extractMeter(pool: ConnectionPool, sourceId: number, label: stri
   const sink: RowSink =
     output.format === 'long'
       ? new LongSink(meterField, columns, fmt, tf, output.includeUtc, write, ctx.grid)
-      : new WideSink(perMeterFile ? '' : meterField + fmt.sep, columns, fmt, tf, output.includeUtc, write, ctx.grid);
+      : output.format === 'timestamp'
+        ? new KeyedWideSink(columns, fmt, tf, write, ctx.grid)
+        : new WideSink(perMeterFile ? '' : meterField + fmt.sep, columns, fmt, tf, output.includeUtc, write, ctx.grid);
 
   const params = bindCommon(req, sourceId, columns.map((c) => c.id), ctx.from, ctx.to);
   const text = dataSql(params, output.format === 'long' ? 'quantity' : 'time', ctx.readUncommitted ? READ_UNCOMMITTED : READ_COMMITTED);

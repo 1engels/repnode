@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { relativePresetLabels, type HistoryEntryDTO, type ReportDTO } from '@repnode/shared';
+import { FORMAT_LABELS, relativePresetLabels, type HistoryEntryDTO, type ReportDTO } from '@repnode/shared';
 import Icon from '../components/Icon.vue';
 import RunReportModal from '../components/RunReportModal.vue';
 import { get } from '../lib/api';
@@ -116,7 +116,7 @@ const statusLabel: Record<string, string> = { done: 'Completado', error: 'Error'
           <dt class="text-slate-500">Mediciones</dt><dd class="text-right font-medium">{{ r.definition.quantityIds.length }}</dd>
           <dt class="text-slate-500">Rango</dt><dd class="truncate text-right font-medium">{{ rangeText(r) }}</dd>
           <dt class="text-slate-500">Formato</dt>
-          <dd class="text-right font-medium">{{ r.definition.output.format === 'zip' ? 'ZIP por medidor' : r.definition.output.format === 'long' ? 'CSV largo' : 'CSV ancho' }}</dd>
+          <dd class="text-right font-medium">{{ FORMAT_LABELS[r.definition.output.format] ?? FORMAT_LABELS.wide }}</dd>
         </dl>
         <div class="mt-4 flex items-center gap-2 border-t border-slate-100 pt-3">
           <button class="btn btn-primary btn-sm" @click="running = r"><Icon name="download" /> Generar CSV</button>

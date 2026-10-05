@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { nanoid } from 'nanoid';
 import type { FastifyBaseLogger } from 'fastify';
-import { renderFileName, utcToLocalInput, type JobState, type ReportDefinition, type ValidationResult } from '@repnode/shared';
+import { renderFileName, splitColumns, utcToLocalInput, type JobState, type ReportDefinition, type ValidationResult } from '@repnode/shared';
 import { paths } from '../config.ts';
 import { buildMssqlConfig } from '../mssql/config.ts';
 import type { Session } from '../mssql/session.ts';
@@ -104,14 +104,17 @@ export function createJob({ session, definition, reportId, selection, validation
   const output = definition.output;
   const meters: MeterTask[] = selection.sourceIds.map((sid, index) => {
     const s = catalog.sourceById.get(sid)!;
-    return { index, sourceId: sid, label: output.meterLabel === 'name' ? s.name : s.displayName };
+    // El formato por estampa de tiempo siempre usa GRUPO.MEDIDOR (Source.Name) en los encabezados
+    return { index, sourceId: sid, label: output.meterLabel === 'name' || output.format === 'timestamp' ? s.name : s.displayName };
   });
   const columns: QuantityColumn[] = selection.quantityIds.map((qid) => {
     const q = catalog.quantityById.get(qid)!;
     return { id: q.id, name: q.name, unit: q.unit };
   });
 
-  const ext = output.format === 'zip' ? 'zip' : 'csv';
+  // Por estampa de tiempo con más de MAX_FILE_COLUMNS columnas se entregan varios CSV en un ZIP
+  const multiFile = output.format === 'timestamp' && splitColumns(meters.length, columns.length, output.columnsByQuantity).length > 1;
+  const ext = output.format === 'zip' || multiFile ? 'zip' : 'csv';
   const fileName = renderFileName(output.fileName, {
     reportName: definition.name,
     fromLocal: selection.range.fromLocal,
@@ -222,7 +225,9 @@ export function createJob({ session, definition, reportId, selection, validation
       }
       state.status = 'assembling';
       publish(job, true);
-      state.bytes = await assemble(dir, job.outFile, meters, columns, output);
+      const result = await assemble({ dir, outFile: job.outFile, meters, columns, output, timezone: selection.timezone, fileName });
+      state.bytes = result.bytes;
+      if (result.rows != null) state.rows = result.rows;
       finish(job, 'done');
     },
   };

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRouter } from 'vue-router';
-import { isValidTimeZone, outputSchema, reportDefinitionSchema, resolveRange, type ReportDefinition, type ValidationResult } from '@repnode/shared';
+import { FORMAT_LABELS, isValidTimeZone, outputSchema, reportDefinitionSchema, resolveRange, type ReportDefinition, type ValidationResult } from '@repnode/shared';
 import DateRangeEditor from '../components/DateRangeEditor.vue';
 import Icon from '../components/Icon.vue';
 import JobProgressModal from '../components/JobProgressModal.vue';
@@ -196,7 +196,7 @@ const steps = computed(() => [
   { id: 'meters' as Step, n: 1, title: 'Medidores', sub: `${formatNumber(effectiveIds.value.length)} seleccionados`, ok: effectiveIds.value.length > 0, err: validation.result.value?.summary.metersWithErrors },
   { id: 'quantities' as Step, n: 2, title: 'Mediciones', sub: `${draft.value.quantityIds.length} seleccionadas`, ok: draft.value.quantityIds.length > 0, err: validation.result.value?.quantities.filter((q) => q.errors).length },
   { id: 'range' as Step, n: 3, title: 'Rango y zona horaria', sub: draft.value.range.mode === 'fixed' ? 'Fechas fijas' : 'Relativo', ok: rangeValid.value, err: 0 },
-  { id: 'output' as Step, n: 4, title: 'Archivo de salida', sub: draft.value.output.format === 'wide' ? 'CSV ancho' : draft.value.output.format === 'long' ? 'CSV largo' : 'ZIP por medidor', ok: true, err: 0 },
+  { id: 'output' as Step, n: 4, title: 'Archivo de salida', sub: FORMAT_LABELS[draft.value.output.format], ok: true, err: 0 },
 ]);
 const stepIndex = computed(() => steps.value.findIndex((s) => s.id === step.value));
 </script>

@@ -79,7 +79,7 @@ export class WideSink implements RowSink {
     if (i !== undefined) this.vals[i] = value;
   }
 
-  private timeFields(tsMs: number): string {
+  protected timeFields(tsMs: number): string {
     return this.includeUtc ? this.tf.format(tsMs) + this.fmt.sep + formatUtc(tsMs) : this.tf.format(tsMs);
   }
 
@@ -115,6 +115,20 @@ export class WideSink implements RowSink {
     this.flushRow();
     this.curTs = -1;
     if (this.grid) this.fillUntil(this.grid.toMs);
+  }
+}
+
+/**
+ * Parcial del formato "por estampa de tiempo": como el ancho, pero la primera columna es el timestamp en ms UTC
+ * (`ts;v1;v2…`), para que el ensamblado combine todos los medidores ordenando por tiempo.
+ */
+export class KeyedWideSink extends WideSink {
+  constructor(columns: QuantityColumn[], fmt: CsvFormatter, tf: LocalTimeFormatter, write: Write, grid: TimeGrid | null = null) {
+    super('', columns, fmt, tf, false, write, grid);
+  }
+
+  protected override timeFields(tsMs: number): string {
+    return String(tsMs);
   }
 }
 

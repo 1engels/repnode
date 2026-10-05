@@ -103,7 +103,8 @@ export default async function reportRoutes(app: FastifyInstance) {
     if (output.fillGaps) {
       // Tope de seguridad: la grilla se escribe aunque no haya datos (p. ej. 1 min durante un año × cientos de medidores)
       const slots = gridSlotCount(makeGrid(selection.range.fromUtcMs, selection.range.toUtcMs, output.intervalMinutes));
-      const rows = slots * selection.sourceIds.length * (output.format === 'long' ? selection.quantityIds.length : 1);
+      // Por estampa de tiempo hay una sola fila por casillero para todos los medidores
+      const rows = output.format === 'timestamp' ? slots : slots * selection.sourceIds.length * (output.format === 'long' ? selection.quantityIds.length : 1);
       if (rows > MAX_GRID_ROWS) {
         throw new HttpError(400, `Completar filas generaría unas ${rows.toLocaleString('es')} filas (máximo ${MAX_GRID_ROWS.toLocaleString('es')}). Usa un intervalo mayor o un rango más corto.`, 'grid_too_large');
       }

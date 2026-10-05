@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-  GRID_INTERVALS, gridSlotCount, isValidTimeZone, makeGrid, MAX_GRID_ROWS, renderFileName, resolveRange, utcToLocalInput,
-  type DateRange, type OutputOptions,
+  GRID_INTERVALS, gridSlotCount, isValidTimeZone, makeGrid, MAX_FILE_COLUMNS, MAX_GRID_ROWS, renderFileName, resolveRange, splitColumns,
+  utcToLocalInput, type DateRange, type OutputOptions,
 } from '@repnode/shared';
 import Icon from './Icon.vue';
 import { formatNumber } from '../lib/util';
@@ -14,6 +14,11 @@ const formats = [
   { id: 'wide', title: 'Ancho', icon: 'file', desc: 'Una fila por medidor y fecha/hora; una columna por medición. Ideal para Excel.', example: 'Medidor;FechaHora;kWh;kVARh\nTablero 1;2025-01-01 00:15:00;10,5;2,1' },
   { id: 'long', title: 'Largo', icon: 'layers', desc: 'Una fila por valor (medidor, medición, fecha). Ideal para Power BI y tablas dinámicas.', example: 'Medidor;Medicion;Unidad;FechaHora;Valor\nTablero 1;kWh del;kWh;2025-01-01 00:15:00;10,5' },
   { id: 'zip', title: 'ZIP por medidor', icon: 'copy', desc: 'Un CSV (formato ancho) por medidor dentro de un archivo .zip.', example: 'Tablero 1.csv\nTablero 2.csv\n…' },
+  {
+    id: 'timestamp', title: 'Por estampa de tiempo', icon: 'clock',
+    desc: 'Una fila por fecha/hora con todos los medidores; una columna por medidor y medición (GRUPO.MEDIDOR.Medición).',
+    example: 'FechaHora;PLANTA.TAB1.kWh [kWh];PLANTA.TAB2.kWh [kWh]\n2025-01-01 00:15:00;10,5;7,3',
+  },
 ] as const;
 
 function set<K extends keyof OutputOptions>(key: K, value: OutputOptions[K]) {
@@ -34,10 +39,19 @@ const preview = computed(() => {
       fromLocal: r.fromLocal,
       toLocal: r.toLocal,
       generatedLocal: utcToLocalInput(Date.now(), props.timezone),
-    }, output.value.format === 'zip' ? 'zip' : 'csv');
+    }, output.value.format === 'zip' || layout.value.files > 1 ? 'zip' : 'csv');
   } catch {
     return '';
   }
+});
+
+// Formato por estampa de tiempo: columnas = medidores × mediciones, repartidas en archivos de hasta MAX_FILE_COLUMNS
+const layout = computed(() => {
+  const meters = props.meterCount ?? 0;
+  const quantities = props.quantityCount ?? 0;
+  const columns = meters * quantities;
+  if (output.value.format !== 'timestamp' || !columns) return { columns, files: 1 };
+  return { columns, files: splitColumns(meters, quantities, output.value.columnsByQuantity).length };
 });
 
 // Estimación de filas con la grilla completa (se escriben aunque no haya datos)
@@ -47,6 +61,8 @@ const grid = computed(() => {
     if (!isValidTimeZone(props.timezone)) return { perDay, slots: null, total: null };
     const r = resolveRange(props.range, props.timezone);
     const slots = gridSlotCount(makeGrid(r.fromUtcMs, r.toUtcMs, output.value.intervalMinutes));
+    // Por estampa de tiempo hay una sola fila por casillero para todos los medidores
+    if (output.value.format === 'timestamp') return { perDay, slots, total: slots };
     const perMeter = slots * (output.value.format === 'long' ? props.quantityCount || 1 : 1);
     return { perDay, slots, total: props.meterCount ? perMeter * props.meterCount : null };
   } catch {
@@ -68,7 +84,7 @@ function insertToken(token: string) {
   <div class="space-y-6">
     <div>
       <span class="label">Formato del archivo</span>
-      <div class="grid gap-3 md:grid-cols-3">
+      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <button
           v-for="f in formats"
           :key="f.id"
@@ -82,6 +98,30 @@ function insertToken(token: string) {
           <pre class="mt-3 overflow-hidden rounded bg-slate-50 p-2 text-[10px] leading-snug text-slate-500">{{ f.example }}</pre>
         </button>
       </div>
+    </div>
+
+    <div v-if="output.format === 'timestamp'" class="space-y-2 rounded-lg border border-brand-500/40 bg-brand-50/30 p-3">
+      <label class="flex items-start gap-2 text-sm">
+        <input type="checkbox" class="checkbox mt-0.5" :checked="output.columnsByQuantity" @change="set('columnsByQuantity', ($event.target as HTMLInputElement).checked)" />
+        <span>
+          <span class="font-medium">Agrupar columnas por medición</span>
+          <span class="block text-xs text-slate-500">
+            <template v-if="output.columnsByQuantity">Todos los medidores de una medición juntos: TAB1.kWh, TAB2.kWh…, TAB1.kVARh, TAB2.kVARh…</template>
+            <template v-else>Todas las mediciones de un medidor juntas: TAB1.kWh, TAB1.kVARh, TAB2.kWh, TAB2.kVARh…</template>
+          </span>
+        </span>
+      </label>
+      <p class="text-xs text-slate-600">
+        Encabezados <span class="font-mono">GRUPO.MEDIDOR.Medición [unidad]</span>, con los medidores ordenados por GRUPO.MEDIDOR.
+        <template v-if="layout.columns"> · <b>{{ formatNumber(layout.columns) }}</b> columnas de datos</template>
+      </p>
+      <p v-if="layout.files > 1" class="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+        <Icon name="alert" :size="16" class="shrink-0 text-amber-600" />
+        <span>
+          Supera las {{ formatNumber(MAX_FILE_COLUMNS) }} columnas por archivo: se entregarán <b>{{ layout.files }} archivos CSV</b> dentro de un ZIP,
+          sin partir {{ output.columnsByQuantity ? 'una medición' : 'un medidor' }} entre archivos cuando sea posible.
+        </span>
+      </p>
     </div>
 
     <div class="grid gap-4 md:grid-cols-4">
@@ -109,7 +149,13 @@ function insertToken(token: string) {
       </div>
       <div>
         <label class="label" for="label">Nombre del medidor</label>
-        <select id="label" class="input" :value="output.meterLabel" @change="set('meterLabel', ($event.target as HTMLSelectElement).value as OutputOptions['meterLabel'])">
+        <select
+          id="label"
+          class="input"
+          :disabled="output.format === 'timestamp'"
+          :title="output.format === 'timestamp' ? 'Este formato siempre usa GRUPO.MEDIDOR' : ''"
+          :value="output.format === 'timestamp' ? 'name' : output.meterLabel"
+          @change="set('meterLabel', ($event.target as HTMLSelectElement).value as OutputOptions['meterLabel'])">
           <option value="displayName">Nombre visible</option>
           <option value="name">Nombre interno (Grupo.Medidor)</option>
         </select>
@@ -142,7 +188,7 @@ function insertToken(token: string) {
           </label>
           <span class="text-xs text-slate-600">
             <b>{{ formatNumber(grid.perDay) }}</b> filas por día{{ output.format === 'long' ? ' por medición' : '' }}
-            <template v-if="grid.slots != null"> · {{ formatNumber(grid.slots) }} por {{ output.format === 'long' ? 'medición y medidor' : 'medidor' }} en este rango</template>
+            <template v-if="grid.slots != null && output.format !== 'timestamp'"> ·{{ formatNumber(grid.slots) }} por {{ output.format === 'long' ? 'medición y medidor' : 'medidor' }} en este rango</template>
             <template v-if="grid.total != null"> · ≈ {{ formatNumber(grid.total) }} en total</template>
           </span>
         </div>
