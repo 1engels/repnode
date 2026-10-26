@@ -87,7 +87,9 @@ export const GRID_INTERVALS = [1, 5, 10, 15, 30, 60] as const;
 
 export const outputSchema = z
   .object({
-    format: z.enum(['wide', 'long', 'zip']).default('wide'),
+    format: z.enum(['wide', 'long', 'zip', 'timestamp']).default('wide'),
+    /** Formato por estampa de tiempo: columnas agrupadas por medición (M1.q1, M2.q1…) en vez de por medidor */
+    columnsByQuantity: z.boolean().default(false),
     delimiter: z.enum([';', ',', '\t']).default(';'),
     decimal: z.enum([',', '.']).default('.'),
     decimals: z.number().int().min(0).max(10).nullable().default(null),
@@ -103,6 +105,13 @@ export const outputSchema = z
     path: ['decimal'],
   });
 export type OutputOptions = z.infer<typeof outputSchema>;
+
+export const FORMAT_LABELS: Record<OutputOptions['format'], string> = {
+  wide: 'CSV ancho',
+  long: 'CSV largo',
+  zip: 'ZIP por medidor',
+  timestamp: 'Por estampa de tiempo',
+};
 
 export const timeZoneSchema = z.string().min(1).refine(isValidTimeZone, 'Zona horaria inválida');
 

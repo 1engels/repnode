@@ -75,6 +75,7 @@ repnode/
 │  ├─ filename.ts             sanitizeFileName() (Windows) y renderFileName() (plantilla con tokens)
 │  ├─ list-selection.ts       clickSelect() (clic/Ctrl/Shift estilo explorador) y checkboxSelect() (+ pruebas)
 │  ├─ grid.ts                 grilla para completar filas: makeGrid, gridSlotCount, isOnGrid, MAX_GRID_ROWS (+ pruebas)
+│  ├─ timestamp-layout.ts     formato por estampa de tiempo: orden de columnas y reparto en archivos (+ pruebas)
 │  └─ time.test.ts
 ├─ apps/server/
 │  ├─ src/
@@ -96,9 +97,10 @@ repnode/
 │  │     ├─ job-manager.ts    cola FIFO (1 job a la vez), reparto en shards, workers, progreso, TTL
 │  │     ├─ job-worker.ts     worker_thread: pool propio, p-limit, reintentos, cancelación
 │  │     ├─ extract.ts        extractMeter(): 1 consulta en streaming por medidor → archivo parcial
-│  │     ├─ formats.ts        WideSink (pivot en streaming), LongSink, headerLine
+│  │     ├─ formats.ts        WideSink (pivot en streaming), KeyedWideSink, LongSink, headerLine
+│     ├─ timestamp-merge.ts  LineReader + mergeByTimestamp (k-way por timestamp) para el formato por estampa de tiempo
 │  │     ├─ csv.ts            CsvFormatter (RFC 4180, decimal), BufferedWriter (contrapresión), BOM, EOL
-│  │     ├─ assemble.ts       une parciales (ancho/largo) o arma el ZIP
+│  │     ├─ assemble.ts       une parciales (ancho/largo), arma el ZIP o combina por timestamp
 │  │     └─ protocol.ts       mensajes padre↔worker, MeterTask, partPath
 │  ├─ scripts/                (requieren .env.test.local)
 │  │  ├─ check-vm.ts          verificación contra SQL real: catálogo, paridad, cobertura, extracción
@@ -286,6 +288,18 @@ Detalles clave:
   - `wide`: `Medidor;FechaHora;[FechaHoraUTC;]<Medición [unidad]>…`, una fila por medidor y timestamp.
   - `long`: `Medidor;Medicion;Unidad;FechaHora;[FechaHoraUTC;]Valor`.
   - `zip`: un CSV ancho por medidor, sin columna Medidor, llamado `<label saneado>.csv`; los duplicados llevan ` (n)`.
+  - `timestamp` (**por estampa de tiempo**): `FechaHora;[FechaHoraUTC;]<GRUPO.MEDIDOR.Medición [unidad]>…`, una fila por
+    timestamp con todos los medidores. Siempre usa `Source.Name` (ignora `meterLabel`) y ordena los medidores por nombre.
+    - `columnsByQuantity` (casilla): `false` = por medidor (M1.q1, M1.q2, M2.q1…); `true` = por medición (M1.q1, M2.q1…).
+    - Extracción igual que el ancho, pero el parcial lleva el timestamp en ms (`KeyedWideSink`: `ts;v1;…`). Al
+      ensamblar, `mergeByTimestamp` combina los parciales con un montículo mínimo y una lectura con buffer propio;
+      con más de 256 parciales combina en dos niveles (grupos de 256 → parciales intermedios) para no abrir cientos de
+      archivos. Un medidor sin ese timestamp deja sus celdas vacías. El ensamblado corre en el hilo principal.
+    - Columnas por archivo: máximo `MAX_FILE_COLUMNS` = 16.000 (Excel admite 16.384). Si se supera, `splitColumns`
+      reparte en varios CSV (sin partir un medidor o una medición si cabe entero) dentro de un ZIP:
+      `<nombre> (parte k de K).csv`. La GUI lo avisa en el paso 4 y la extensión de descarga pasa a `.zip`.
+    - `JobState.rows` toma las filas combinadas (no la suma de los parciales). Con "Completar filas", todos los
+      medidores comparten la misma grilla, así que hay una fila por casillero.
 - **Completar filas** (`output.fillGaps` + `output.intervalMinutes` ∈ `GRID_INTERVALS` = 1, 5, 10, 15, 30, 60; por defecto
   apagado y 15 min): los sinks reciben un `TimeGrid` y escriben una fila por casillero sin datos, con el valor en blanco.
   - Casilleros = `inicio + k·intervalo` dentro de `(inicio, fin]` (misma semántica del rango): un día a 15 min da
@@ -295,7 +309,8 @@ Detalles clave:
     consulta).
   - Un timestamp con datos que no cae en la grilla **se conserva como fila extra** (no se mueve ni se descarta) y se
     cuenta en `offGrid` → `JobState.offGridRows` → aviso en JobProgressModal e historial.
-  - Tope: `MAX_GRID_ROWS` = 50 M filas estimadas (medidores × casilleros × mediciones si es largo); por encima, 400
+  - Tope: `MAX_GRID_ROWS` = 50 M filas estimadas (medidores × casilleros × mediciones si es largo; solo casilleros en
+    el formato por estampa de tiempo); por encima, 400
     `grid_too_large`. La GUI muestra la estimación en el paso 4.
 - Nombre de archivo: plantilla con `{reporte}` `{desde}` `{hasta}` `{generado}` (formato `YYYYMMDD` o `YYYYMMDD-HHmm`),
   saneada para Windows. La descarga usa `Content-Disposition` con `filename` ASCII más `filename*=UTF-8''…`.
@@ -363,7 +378,9 @@ Códigos de error frecuentes: `not_connected` (409), `connect_failed`, `invalid_
      rojo); búsqueda; presets (usar, sumar, guardar, eliminar). **El orden de la lista es el orden de las columnas.**
   3. **DateRangeEditor**: rango fijo (`datetime-local` más atajos) o relativo; zona IANA con datalist; muestra la
      consulta en UTC.
-  4. **OutputEditor**: formato, separadores, decimales, nombre del medidor (DisplayName o Name), columna UTC,
+  4. **OutputEditor**: formato (Ancho, Largo, ZIP por medidor, Por estampa de tiempo; este último con la casilla
+     "Agrupar columnas por medición", el total de columnas y el aviso de varios archivos), separadores, decimales,
+     nombre del medidor (DisplayName o Name; deshabilitado en el formato por estampa de tiempo), columna UTC,
      "Completar filas faltantes" con intervalo (filas por día, por medidor y total estimado; aviso si supera el tope) y
      plantilla de nombre con vista previa.
 - **Validación en la GUI** (`useValidation`): se dispara con un debounce de 500 ms cada vez que cambia la selección y
@@ -393,6 +410,7 @@ Códigos de error frecuentes: `not_connected` (409), `connect_failed`, `invalid_
   editor de reportes revalida cuando cambian los miembros de sus tags dinámicos (`useValidation(..., extraKey)`).
 - **SettingsView**: workers, consultas por worker (muestra el total de conexiones), timeout, TTL, READ UNCOMMITTED y
   refresco del catálogo.
+- Las etiquetas de formato salen de `FORMAT_LABELS` (shared).
 - Estilos: Tailwind v4 con `@theme` (colores `brand-*`) y clases propias en `@layer components` (`.card`, `.btn`,
   `.btn-primary`, `.input`, `.label`, `.chip`, `.checkbox`). Los toasts van en `bottom-20` para no tapar la barra fija.
 - Íconos: `Icon.vue` con paths SVG propios; para agregar uno, extender el mapa `paths`.
@@ -412,8 +430,8 @@ Gotchas del frontend:
 
 ```bash
 pnpm install
-pnpm dev            # API :3210 (node --watch-path) + Vite :5173 (proxy /api)
-pnpm test           # vitest: shared (zonas horarias, rangos, nombres, selección de listas, grilla) + server (CSV, sinks + grilla, cifrado, classify)
+pnpm dev            # API :3210 (node --watch-path) + Vite :5173 (proxy /api). Si da `EACCES` al escuchar, Windows reservó el puerto (rango de exclusión de winnat): `net stop winnat && net start winnat` como administrador
+pnpm test           # vitest: shared (zonas horarias, rangos, nombres, selección de listas, grilla, columnas por timestamp) + server (CSV, sinks + grilla, combinación por timestamp, cifrado, classify)
 pnpm typecheck      # tsc (shared, server) + vue-tsc (web)
 pnpm build          # vue-tsc + vite build → apps/web/dist
 pnpm serve          # build + start (un solo proceso en :3210)

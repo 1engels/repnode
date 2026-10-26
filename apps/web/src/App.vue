@@ -32,7 +32,7 @@ async function disconnect() {
         <RouterLink to="/reports" class="flex items-center gap-2 font-semibold text-slate-900">
           <img src="/favicon.svg" alt="" class="size-7" />
           <span>RepNode</span>
-          <span class="hidden text-sm font-normal text-slate-500 sm:inline">· Extractor de mediciones</span>
+          <span class="hidden text-sm font-normal text-slate-500 sm:inline"></span>
         </RouterLink>
         <nav v-if="session.connected" class="ml-4 flex items-center gap-1 text-sm">
           <RouterLink to="/reports" class="rounded-md px-3 py-1.5 text-slate-600 hover:bg-slate-100" active-class="!bg-brand-50 !text-brand-700 font-medium">Reportes</RouterLink>
