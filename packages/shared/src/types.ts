@@ -16,6 +16,22 @@ export interface SessionDTO {
   serverVersion: string | null;
 }
 
+/** Conexión a PME de producción definida por variables de entorno del servidor (nunca incluye la contraseña). */
+export interface ProductionStatusDTO {
+  /** Están definidas REPNODE_SERVER, REPNODE_AUTH_USER y REPNODE_AUTH_PASS (y el puerto, si se indica, es válido). */
+  configured: boolean;
+  /** Variables obligatorias que faltan. */
+  missing: string[];
+  /** La conexión se pudo establecer en la última comprobación. */
+  available: boolean;
+  /** Servidor y base, p. ej. "10.0.0.5,1433 · ION_Data". */
+  target: string | null;
+  username: string | null;
+  serverVersion: string | null;
+  error: string | null;
+  checkedAt: string | null;
+}
+
 export interface SourceDTO {
   id: number;
   name: string;

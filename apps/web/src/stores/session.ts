@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { useLocalStorage } from '@vueuse/core';
-import type { ConnectionParams, ProfileDTO, SessionDTO } from '@repnode/shared';
+import type { ConnectionParams, ProductionStatusDTO, ProfileDTO, SessionDTO } from '@repnode/shared';
 import { del, get, post } from '../lib/api';
 import { randomSecret } from '../lib/util';
 
@@ -69,6 +69,16 @@ export const useSessionStore = defineStore('session', () => {
     rememberLocal(res.profile, p.clientSecret);
   }
 
+  /** Estado de la conexión a PME de producción (variables de entorno del servidor); refresh = volver a probarla. */
+  async function productionStatus(refresh = false): Promise<ProductionStatusDTO> {
+    return get<ProductionStatusDTO>('/api/connection/production' + (refresh ? '?refresh=1' : ''));
+  }
+
+  async function connectProduction(): Promise<void> {
+    const res = await post<{ session: SessionDTO }>('/api/connection/production/connect');
+    session.value = res.session;
+  }
+
   async function test(params: ConnectionParams, password: string, edit: ProfileEdit | null = null): Promise<string> {
     const r = await post<{ version: string }>('/api/connection/test', { params, password, profileId: edit?.id, clientSecret: edit?.clientSecret ?? undefined });
     return r.version;
@@ -87,5 +97,5 @@ export const useSessionStore = defineStore('session', () => {
     session.value = { connected: false, profileId: null, server: null, database: null, username: null, serverVersion: null };
   }
 
-  return { session, checked, connected, localProfiles, serverProfiles, check, loadServerProfiles, connectNew, connectProfile, test, forgetProfile, disconnect, markDisconnected };
+  return { session, checked, connected, localProfiles, serverProfiles, check, loadServerProfiles, connectNew, connectProfile, productionStatus, connectProduction, test, forgetProfile, disconnect, markDisconnected };
 });

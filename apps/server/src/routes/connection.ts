@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { connectionParamsSchema, connectRequestSchema, type ProfileDTO } from '@repnode/shared';
+import { connectionParamsSchema, connectRequestSchema, type ProductionStatusDTO, type ProfileDTO } from '@repnode/shared';
 import { HttpError } from '../errors.ts';
 import { connect, disconnect, sessionDTO, testConnection } from '../mssql/session.ts';
-import { decryptSecret, encryptSecret, idForNewProfile } from '../security/secrets.ts';
+import { parseProductionEnv } from '../production.ts';
+import { decryptSecret, encryptSecret, idForNewProfile, profileIdFor } from '../security/secrets.ts';
 import { profiles, type StoredProfile } from '../store/sqlite.ts';
 import { clearValidationCache } from '../validate.ts';
 
@@ -18,6 +19,36 @@ function toDTO(p: StoredProfile): ProfileDTO {
 
 function defaultName(p: z.infer<typeof connectionParamsSchema>): string {
   return `${p.database} @ ${p.server}${p.instance ? `\\${p.instance}` : ''}`;
+}
+
+function describeTarget(p: z.infer<typeof connectionParamsSchema>): string {
+  return `${p.server}${p.port ? `,${p.port}` : p.instance ? `\\${p.instance}` : ''} · ${p.database}`;
+}
+
+/** Resultado de la última comprobación de la conexión de producción; se reutiliza un minuto. */
+const PRODUCTION_CHECK_TTL_MS = 60_000;
+let productionCheck: { at: number; promise: Promise<ProductionStatusDTO> } | null = null;
+
+async function checkProduction(): Promise<ProductionStatusDTO> {
+  const env = parseProductionEnv(process.env);
+  const checkedAt = new Date().toISOString();
+  if (!env.ok) {
+    return { configured: false, missing: env.missing, available: false, target: null, username: null, serverVersion: null, error: env.error, checkedAt };
+  }
+  const base = { configured: true, missing: [], target: describeTarget(env.params), username: env.params.username, checkedAt };
+  try {
+    const version = await testConnection(env.params, env.password);
+    return { ...base, available: true, serverVersion: version, error: null };
+  } catch (err) {
+    return { ...base, available: false, serverVersion: null, error: (err as Error).message };
+  }
+}
+
+function productionStatus(refresh: boolean): Promise<ProductionStatusDTO> {
+  if (refresh || !productionCheck || Date.now() - productionCheck.at > PRODUCTION_CHECK_TTL_MS) {
+    productionCheck = { at: Date.now(), promise: checkProduction() };
+  }
+  return productionCheck.promise;
 }
 
 export default async function connectionRoutes(app: FastifyInstance, opts: { masterKey: Buffer }) {
@@ -77,6 +108,26 @@ export default async function connectionRoutes(app: FastifyInstance, opts: { mas
     }
     clearValidationCache();
     return { session: sessionDTO(), profile };
+  });
+
+  app.get<{ Querystring: { refresh?: string } }>('/api/connection/production', async (req) => productionStatus(req.query.refresh === '1'));
+
+  app.post('/api/connection/production/connect', async () => {
+    const env = parseProductionEnv(process.env);
+    if (!env.ok) {
+      throw new HttpError(400, env.error ?? `Faltan variables de entorno: ${env.missing.join(', ')}`, 'production_not_configured');
+    }
+    // Reutiliza el ID de una conexión recordada con los mismos datos, para compartir sus reportes, tags y jerarquías
+    const hash = profileIdFor(env.params);
+    const id = profiles.list().find((p) => profileIdFor(p.params) === hash)?.id ?? hash;
+    try {
+      await connect(id, env.params, env.password);
+    } catch (err) {
+      productionCheck = null;
+      throw err;
+    }
+    clearValidationCache();
+    return { session: sessionDTO() };
   });
 
   app.post('/api/connection/disconnect', async () => {

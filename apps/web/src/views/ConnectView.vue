@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import type { ConnectionParams, ProfileDTO } from '@repnode/shared';
+import type { ConnectionParams, ProductionStatusDTO, ProfileDTO } from '@repnode/shared';
 import Icon from '../components/Icon.vue';
 import { useCatalogStore } from '../stores/catalog';
 import { useReportsStore } from '../stores/reports';
@@ -42,8 +42,24 @@ const orphanProfiles = computed<ProfileDTO[]>(() => {
   return session.serverProfiles.filter((p) => !local.has(p.id));
 });
 
+/** Conexión a PME de producción (variables REPNODE_* del servidor): el botón solo se activa si se pudo establecer. */
+const production = ref<ProductionStatusDTO | null>(null);
+const productionChecking = ref(false);
+
+async function checkProduction(refresh = false) {
+  productionChecking.value = true;
+  try {
+    production.value = await session.productionStatus(refresh);
+  } catch {
+    production.value = null;
+  } finally {
+    productionChecking.value = false;
+  }
+}
+
 onMounted(() => {
   session.loadServerProfiles().catch(() => {});
+  checkProduction();
 });
 
 function params(): ConnectionParams {
@@ -141,6 +157,19 @@ async function connectSaved(p: LocalProfile) {
   }
 }
 
+async function connectProduction() {
+  busy.value = 'production';
+  try {
+    await session.connectProduction();
+    await afterConnect();
+  } catch (e) {
+    toast.error(e);
+    checkProduction(true);
+  } finally {
+    busy.value = null;
+  }
+}
+
 async function forget(p: { id: string; name: string }) {
   if (!confirm(`¿Olvidar la conexión "${p.name}"? Se borrará la contraseña guardada.`)) return;
   if (editing.value?.id === p.id) newConnection();
@@ -154,6 +183,33 @@ async function forget(p: { id: string; name: string }) {
     <section>
       <h1 class="text-2xl font-semibold text-slate-900">Conectar a SQL Server</h1>
       <p class="mt-1 text-sm text-slate-600">Base de datos ION_Data de Power Monitoring Expert (SQL Server 2016 o superior).</p>
+
+      <div class="mt-6">
+        <button
+          type="button"
+          class="btn w-full justify-start gap-3 border-emerald-600 bg-emerald-600 px-4 py-3 text-left text-white hover:bg-emerald-700 disabled:hover:bg-emerald-600"
+          :disabled="!!busy || productionChecking || !production?.available"
+          @click="connectProduction"
+        >
+          <Icon :name="busy === 'production' || productionChecking ? 'refresh' : 'plug'" :size="20" :class="(busy === 'production' || productionChecking) && 'animate-spin'" />
+          <span class="min-w-0 flex-1">
+            <span class="block font-semibold">Conectar con PME de producción</span>
+            <span v-if="production?.target" class="block truncate text-xs font-normal text-emerald-50">{{ production.username }} @ {{ production.target }}</span>
+          </span>
+        </button>
+        <div v-if="productionChecking" class="mt-1.5 text-xs text-slate-500">Comprobando la conexión de producción…</div>
+        <div v-else-if="!production?.available" class="mt-1.5 flex items-start gap-2 text-xs text-slate-500">
+          <span class="min-w-0 flex-1">
+            <template v-if="!production">No se pudo consultar el estado de la conexión de producción.</template>
+            <template v-else-if="!production.configured">
+              {{ production.error ?? `Deshabilitado: faltan las variables de entorno ${production.missing.join(', ')} en el servidor.` }}
+            </template>
+            <template v-else><span class="text-red-700">No se pudo conectar: {{ production.error }}</span></template>
+          </span>
+          <button type="button" class="btn btn-ghost btn-sm shrink-0" @click="checkProduction(true)"><Icon name="refresh" /> Reintentar</button>
+        </div>
+        <div v-else-if="production.serverVersion" class="mt-1.5 text-xs text-emerald-700">Disponible · SQL Server {{ production.serverVersion }}</div>
+      </div>
 
       <div class="mt-6 space-y-3">
         <h2 class="label">Conexiones recordadas</h2>

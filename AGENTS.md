@@ -93,6 +93,7 @@ repnode/
 │  │  ├─ index.ts             Fastify, filtro de Host, manejo de errores, registro de rutas, estáticos en prod
 │  │  ├─ config.ts            host/puerto/rutas de datos (variables REPNODE_*), flag --prod
 │  │  ├─ errors.ts            HttpError, describeSqlError, isTransientSqlError
+│  │  ├─ production.ts        parseProductionEnv(): conexión a PME de producción desde variables REPNODE_* (+ pruebas)
 │  │  ├─ selection.ts         resolveMeters (directos + tags y nodos dinámicos) y resolveSelection
 │  │  ├─ hierarchy.ts         hierarchyDTO(): jerarquías del perfil con medidores resueltos a IDs del catálogo
 │  │  ├─ validate.ts          validación previa: classify() puro + validateSelection() SQL + caché
@@ -102,7 +103,7 @@ repnode/
 │  │  ├─ mssql/session.ts     sesión activa única: pool, catálogo, verificación de versión y objetos
 │  │  ├─ mssql/catalog.ts     carga de Source/SourceType/Quantity/SourceQuantity
 │  │  ├─ mssql/queries.ts     SQL de extracción (dataSql) y cobertura (coverageSql)
-│  │  ├─ routes/connection.ts sesión, test, connect, disconnect, perfiles
+│  │  ├─ routes/connection.ts sesión, test, connect, disconnect, perfiles, conexión de producción
 │  │  ├─ routes/catalog.ts    catálogo, tags, presets, settings
 │  │  ├─ routes/hierarchy.ts  tableros, espacios, quitar de la jerarquía, posiciones del diagrama
 │  │  ├─ routes/reports.ts    CRUD de reportes, validate, jobs (crear/SSE/cancelar/descargar), historial
@@ -202,6 +203,16 @@ hacer `EXEC` de los SP; si reciben el error 229 (sin permiso), ejecutan el cuerp
   - **Si hay puerto, se usa el puerto y se ignora la instancia** (no depende de SQL Server Browser, UDP 1434). Si solo hay
     instancia, se usa `instanceName`.
   - Autenticación NTLM: se activa al pasar `domain`.
+- **Conexión de producción** (`production.ts`, rutas en `routes/connection.ts`): variables de entorno del servidor
+  `REPNODE_SERVER`, `REPNODE_AUTH_USER`, `REPNODE_AUTH_PASS` (obligatorias), `REPNODE_INSTANCE`, `REPNODE_DB_PORT`
+  (1433 si no hay puerto ni instancia; un puerto explícito gana sobre la instancia) y `REPNODE_DB_NAME` (`ION_Data`).
+  Siempre usuario SQL, `trustServerCertificate: true` y `encrypt: false` (como el formulario por defecto). Se leen de
+  `process.env` en cada petición (el `dev`/`start` carga `apps/server/.env.local`). La contraseña nunca sale del servidor.
+  - `GET /api/connection/production` hace `testConnection` y reutiliza el resultado 60 s (y la promesa en curso);
+    `?refresh=1` fuerza otra prueba.
+  - Al conectar, el `profileId` es el de una conexión recordada con los mismos parámetros o, si no hay, su hash
+    (`profileIdFor`). No se guarda en `connection_profiles` (no hay contraseña que cifrar), pero sus reportes, tags y
+    jerarquías persisten por ese id.
 
 ### 5.3 Catálogo (`mssql/catalog.ts`)
 
@@ -384,6 +395,8 @@ Detalles clave:
 | `GET /api/session` | Estado de la conexión |
 | `POST /api/connection/test` | Prueba de conexión, con `{params,password}` o `{profileId,clientSecret}`; al editar, `{params,password:'',profileId,clientSecret}` usa la contraseña guardada |
 | `POST /api/connection/connect` | Conexión nueva (`params`, `password`, `remember`, `clientSecret`), edición de un perfil (lo mismo + `profileId`: conserva el id, siempre se guarda; `password` vacía = la guardada) o con perfil (`profileId`, `clientSecret`) |
+| `GET /api/connection/production` | `ProductionStatusDTO`: si está configurada (`missing` = variables que faltan) y si se pudo conectar (`available`, `error`); `?refresh=1` vuelve a probar |
+| `POST /api/connection/production/connect` | Conecta con las variables de entorno; 400 `production_not_configured` si faltan |
 | `POST /api/connection/disconnect` | Cierra el pool |
 | `GET /api/profiles` · `DELETE /api/profiles/:id` | Perfiles guardados en el servidor |
 | `GET /api/catalog` · `POST /api/catalog/refresh` | Catálogo |
@@ -404,7 +417,7 @@ Detalles clave:
 | `GET /api/history` | Últimas 50 ejecuciones del perfil |
 
 Códigos de error frecuentes: `not_connected` (409), `connect_failed`, `invalid_database`, `unsupported_version`,
-`decrypt_failed` (401), `profile_not_found`, `validation_failed` (422), `grid_too_large` (400), `invalid_input` (400), `not_found`,
+`decrypt_failed` (401), `profile_not_found`, `production_not_configured` (400), `validation_failed` (422), `grid_too_large` (400), `invalid_input` (400), `not_found`,
 `cycle` (400), `meter_in_use` (409), `duplicate` (409).
 
 ---
@@ -416,7 +429,9 @@ Códigos de error frecuentes: `not_connected` (409), `connect_failed`, `invalid_
 - **Orden y etiqueta de medidores en la GUI**: el store ordena por `Source.Name` (`GRUPO.MEDIDOR`, orden natural) y
   `MeterLabel` muestra el nombre con el **modelo** (`SourceType.Name`) al lado en gris claro; el DisplayName solo si
   difiere. El servidor sigue ordenando por DisplayName (orden de filas en el CSV).
-- **ConnectView**: perfiles recordados (de `localStorage`, con conexión en un clic); perfiles del servidor sin secreto en
+- **ConnectView**: botón verde **Conectar con PME de producción** arriba de "Conexiones recordadas": se consulta su estado
+  al abrir la vista (spinner "Comprobando…"); solo se habilita si `available`. Si no, muestra el motivo (variables que
+  faltan o error de conexión) y "Reintentar" (`refresh`). Perfiles recordados (de `localStorage`, con conexión en un clic); perfiles del servidor sin secreto en
   este navegador ("ingresa la contraseña de nuevo"); formulario (instancia y puerto se excluyen entre sí en la GUI,
   SQL o NTLM, TLS, confiar en el certificado, Recordar); "Probar conexión".
   - **Editar** una conexión recordada (o "Usar" una sin llave, o un fallo al conectar con un perfil) pone el formulario
@@ -573,7 +588,7 @@ Gotchas del frontend:
 ```bash
 pnpm install
 pnpm dev            # API :3210 (node --watch-path) + Vite :5173 (proxy /api). Si da `EACCES` al escuchar, Windows reservó el puerto (rango de exclusión de winnat): `net stop winnat && net start winnat` como administrador
-pnpm test           # vitest: shared (zonas horarias, rangos, nombres, selección de listas, grilla, columnas por timestamp, jerarquías) + server (CSV, sinks + grilla, combinación por timestamp, cifrado, classify)
+pnpm test           # vitest: shared (zonas horarias, rangos, nombres, selección de listas, grilla, columnas por timestamp, jerarquías) + server (CSV, sinks + grilla, combinación por timestamp, cifrado, classify, variables de producción)
 pnpm typecheck      # tsc (shared, server) + vue-tsc (web)
 pnpm build          # vue-tsc + vite build → apps/web/dist
 pnpm serve          # build + start (un solo proceso en :3210)

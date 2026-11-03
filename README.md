@@ -47,6 +47,22 @@ pnpm serve      # = pnpm build && pnpm start
 
 Variables opcionales (`apps/server/.env.local`): `REPNODE_PORT`, `REPNODE_DATA_DIR` (por defecto `./data`), `REPNODE_LOG_LEVEL`.
 
+### Conexión a PME de producción
+
+Si el servidor tiene estas variables (en el entorno o en `apps/server/.env.local`), la pantalla de conexión muestra el
+botón verde **Conectar con PME de producción**, que se activa solo si la conexión se puede establecer:
+
+| Variable | Descripción |
+|---|---|
+| `REPNODE_SERVER` | IP o nombre del servidor SQL (obligatoria) |
+| `REPNODE_INSTANCE` | Nombre de la instancia (opcional; solo se usa si no se indica puerto) |
+| `REPNODE_DB_PORT` | Puerto de SQL Server. Por defecto 1433, salvo que haya instancia (entonces se resuelve con SQL Server Browser) |
+| `REPNODE_DB_NAME` | Base de datos, por defecto `ION_Data` |
+| `REPNODE_AUTH_USER` | Usuario SQL (obligatoria) |
+| `REPNODE_AUTH_PASS` | Contraseña del usuario SQL (obligatoria). Nunca se envía al navegador |
+
+Se autentica con usuario SQL y confía en el certificado del servidor. Al cambiar las variables hay que reiniciar RepNode.
+
 ## Arquitectura
 
 ```
