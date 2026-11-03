@@ -1,3 +1,8 @@
 packages:
   - apps/*
   - packages/*
+
+# @vue-flow/core declara @vueuse/core ^10 (arrastra vue-demi), pero su bundle solo lo usa para tipos.
+# Se unifica con la misma versión que usa la app.
+overrides:
+  "@vueuse/core": "^15.0.0"

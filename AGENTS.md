@@ -55,6 +55,10 @@ Decisiones de librerías:
 - Vue Flow y elkjs son JS puro y se cargan solo en la ruta `/hierarchy` (import dinámico). elkjs corre en un web worker:
   `import ELK from 'elkjs/lib/elk-api.js'` + `workerUrl` de `elkjs/lib/elk-worker.min.js?url` (no usar `elk.bundled.js`,
   que bloquea el hilo principal).
+- `@vue-flow/core` (última: 1.48.2) declara `@vueuse/core ^10` y con él arrastraba `vue-demi`. Su bundle solo importa
+  `vue` en ejecución (el código de VueUse va inlineado); el paquete solo se usa para tipos (`KeyFilter`). Por eso
+  `overrides` en `pnpm-workspace.yaml` fuerza `@vueuse/core ^15` para todo el árbol y `vue-demi` ya no se instala.
+  Si al actualizar vue-flow vuelve a aparecer (`pnpm why vue-demi`), revisar si el override sigue haciendo falta.
 - Código TS del backend y de `shared`: **solo sintaxis "erasable"** (`erasableSyntaxOnly`). Nada de `enum`, `namespace` ni
   propiedades de parámetro en constructores. Los imports relativos llevan **extensión `.ts`**.
 
