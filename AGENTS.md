@@ -92,7 +92,7 @@ repnode/
 │  ├─ src/
 │  │  ├─ index.ts             Fastify, filtro de Host, manejo de errores, registro de rutas, estáticos en prod
 │  │  ├─ config.ts            host/puerto/rutas de datos (variables REPNODE_*), flag --prod
-│  │  ├─ errors.ts            HttpError, describeSqlError, isTransientSqlError
+│  │  ├─ errors.ts            HttpError, describeSqlError (+ pruebas), isTransientSqlError
 │  │  ├─ production.ts        parseProductionEnv(): conexión a PME de producción desde variables REPNODE_* (+ pruebas)
 │  │  ├─ selection.ts         resolveMeters (directos + tags y nodos dinámicos) y resolveSelection
 │  │  ├─ hierarchy.ts         hierarchyDTO(): jerarquías del perfil con medidores resueltos a IDs del catálogo
@@ -203,6 +203,10 @@ hacer `EXEC` de los SP; si reciben el error 229 (sin permiso), ejecutan el cuerp
   - **Si hay puerto, se usa el puerto y se ignora la instancia** (no depende de SQL Server Browser, UDP 1434). Si solo hay
     instancia, se usa `instanceName`.
   - Autenticación NTLM: se activa al pasar `domain`.
+- `describeSqlError()` (`errors.ts`): en errores `ESOCKET`/`ECONNCLOSED` busca el error de red que tedious esconde en
+  `originalError.cause` (un `AggregateError` con un error por dirección probada; su mensaje solo dice "Could not connect
+  (sequence)") y agrega el código con una explicación: `ECONNREFUSED` (nada escucha en el puerto: instancia con otro
+  puerto o TCP/IP deshabilitado), `EHOSTUNREACH`/`ENETUNREACH`, `ENOTFOUND`/`EAI_AGAIN`, `ETIMEDOUT`, `ECONNRESET`.
 - **Conexión de producción** (`production.ts`, rutas en `routes/connection.ts`): variables de entorno del servidor
   `REPNODE_SERVER`, `REPNODE_AUTH_USER`, `REPNODE_AUTH_PASS` (obligatorias), `REPNODE_INSTANCE`, `REPNODE_DB_PORT`
   (1433 si no hay puerto ni instancia; un puerto explícito gana sobre la instancia) y `REPNODE_DB_NAME` (`ION_Data`).
@@ -588,7 +592,7 @@ Gotchas del frontend:
 ```bash
 pnpm install
 pnpm dev            # API :3210 (node --watch-path) + Vite :5173 (proxy /api). Si da `EACCES` al escuchar, Windows reservó el puerto (rango de exclusión de winnat): `net stop winnat && net start winnat` como administrador
-pnpm test           # vitest: shared (zonas horarias, rangos, nombres, selección de listas, grilla, columnas por timestamp, jerarquías) + server (CSV, sinks + grilla, combinación por timestamp, cifrado, classify, variables de producción)
+pnpm test           # vitest: shared (zonas horarias, rangos, nombres, selección de listas, grilla, columnas por timestamp, jerarquías) + server (CSV, sinks + grilla, combinación por timestamp, cifrado, classify, variables de producción, mensajes de error SQL)
 pnpm typecheck      # tsc (shared, server) + vue-tsc (web)
 pnpm build          # vue-tsc + vite build → apps/web/dist
 pnpm serve          # build + start (un solo proceso en :3210)
