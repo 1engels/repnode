@@ -30,6 +30,8 @@ function emptyDraft(): ReportDefinition {
     name: '',
     sourceIds: [],
     tagIds: [],
+    panelIds: [],
+    spaceIds: [],
     quantityIds: [],
     range: { mode: 'relative', preset: 'previousMonth' },
     timezone: localTimeZone(),
@@ -72,7 +74,9 @@ onBeforeRouteLeave(() => {
   if (dirty.value && !confirm('Hay cambios sin guardar. ¿Salir de todas formas?')) return false;
 });
 
-const effectiveIds = computed(() => catalog.effectiveSourceIds(draft.value.sourceIds, draft.value.tagIds));
+const effectiveIds = computed(() => catalog.effectiveSourceIds(draft.value));
+/** Hay tags o nodos dinámicos: sus miembros pueden cambiar sin que cambie el borrador */
+const hasDynamic = computed(() => !!(draft.value.tagIds.length || draft.value.panelIds.length || draft.value.spaceIds.length));
 
 const rangeValid = computed(() => {
   if (!isValidTimeZone(draft.value.timezone)) return false;
@@ -89,9 +93,9 @@ const rangeValid = computed(() => {
 // ---------------------------------------------------------------------------
 const validation = useValidation(() => {
   if (loading.value || !effectiveIds.value.length || !draft.value.quantityIds.length || !rangeValid.value) return null;
-  const { sourceIds, tagIds, quantityIds, range, timezone } = draft.value;
-  return { selection: { sourceIds, tagIds, quantityIds, range, timezone } };
-}, 500, () => (draft.value.tagIds.length ? effectiveIds.value.join(',') : ''));
+  const { sourceIds, tagIds, panelIds, spaceIds, quantityIds, range, timezone } = draft.value;
+  return { selection: { sourceIds, tagIds, panelIds, spaceIds, quantityIds, range, timezone } };
+}, 500, () => (hasDynamic.value ? effectiveIds.value.join(',') : ''));
 
 // El modal se abre solo cuando aparece un error nuevo estando en los pasos finales;
 // en los pasos 1 y 2 basta con las marcas en las listas.
@@ -115,11 +119,13 @@ function openIssues(r: ValidationResult | null = validation.result.value) {
 function removeMeters(ids: number[]) {
   const remove = new Set(ids);
   const direct = new Set(draft.value.sourceIds);
-  if (ids.some((id) => !direct.has(id)) && draft.value.tagIds.length) {
-    // Hay medidores que vienen de tags dinámicos: se convierten a selección fija para poder quitarlos
+  if (ids.some((id) => !direct.has(id)) && hasDynamic.value) {
+    // Hay medidores que vienen de tags o nodos dinámicos: se convierten a selección fija para poder quitarlos
     draft.value.sourceIds = effectiveIds.value;
     draft.value.tagIds = [];
-    toast.info('Los tags dinámicos se convirtieron en selección fija para poder quitar medidores individuales');
+    draft.value.panelIds = [];
+    draft.value.spaceIds = [];
+    toast.info('Los tags y nodos dinámicos se convirtieron en selección fija para poder quitar medidores individuales');
   }
   draft.value.sourceIds = draft.value.sourceIds.filter((id) => !remove.has(id));
   toast.success(`${ids.length} medidores quitados`);
@@ -240,7 +246,7 @@ const stepIndex = computed(() => steps.value.findIndex((s) => s.id === step.valu
       </button>
     </nav>
 
-    <MeterPicker v-if="step === 'meters'" v-model:source-ids="draft.sourceIds" v-model:tag-ids="draft.tagIds" :issues="validation.meterIssues.value" :timezone="draft.timezone" />
+    <MeterPicker v-if="step === 'meters'" v-model:source-ids="draft.sourceIds" v-model:tag-ids="draft.tagIds" v-model:panel-ids="draft.panelIds" v-model:space-ids="draft.spaceIds" :issues="validation.meterIssues.value" :timezone="draft.timezone" />
     <MeasurementPicker v-else-if="step === 'quantities'" v-model="draft.quantityIds" :meter-ids="effectiveIds" :issues="validation.quantityIssues.value" />
     <section v-else-if="step === 'range'" class="card p-6">
       <DateRangeEditor v-model:range="draft.range" v-model:timezone="draft.timezone" />

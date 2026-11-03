@@ -5,7 +5,7 @@ import type { ConnectionParams, ProfileDTO } from '@repnode/shared';
 import Icon from '../components/Icon.vue';
 import { useCatalogStore } from '../stores/catalog';
 import { useReportsStore } from '../stores/reports';
-import { useSessionStore, type LocalProfile } from '../stores/session';
+import { useSessionStore, type LocalProfile, type ProfileEdit } from '../stores/session';
 import { useToastStore } from '../stores/toast';
 import { formatIsoDate } from '../lib/util';
 
@@ -33,6 +33,8 @@ const form = reactive({
 const busy = ref<'test' | 'connect' | string | null>(null);
 const formError = ref<string | null>(null);
 const testOk = ref<string | null>(null);
+/** Conexión recordada que se edita (p. ej. cambió la IP): se actualiza en lugar de crear otra. */
+const editing = ref<ProfileEdit | null>(null);
 
 /** Perfiles guardados en el servidor cuyo secreto ya no está en este navegador (requieren contraseña). */
 const orphanProfiles = computed<ProfileDTO[]>(() => {
@@ -59,7 +61,8 @@ function params(): ConnectionParams {
   };
 }
 
-function fillFrom(p: ConnectionParams & { name?: string }) {
+function fillFrom(p: ConnectionParams & { id: string; name: string; clientSecret?: string }) {
+  editing.value = { id: p.id, name: p.name, clientSecret: p.clientSecret ?? null };
   Object.assign(form, {
     name: p.name ?? '',
     server: p.server,
@@ -74,6 +77,18 @@ function fillFrom(p: ConnectionParams & { name?: string }) {
     trustServerCertificate: p.trustServerCertificate,
   });
   formError.value = null;
+  testOk.value = null;
+}
+
+/** Deja de editar: el formulario vuelve a crear una conexión nueva. */
+function newConnection() {
+  editing.value = null;
+  Object.assign(form, {
+    name: '', server: '', port: '', instance: '', database: 'ION_Data', authType: 'sql', domain: '', username: '',
+    password: '', encrypt: false, trustServerCertificate: true, remember: true,
+  });
+  formError.value = null;
+  testOk.value = null;
 }
 
 async function afterConnect() {
@@ -89,7 +104,7 @@ async function test() {
   testOk.value = null;
   busy.value = 'test';
   try {
-    const v = await session.test(params(), form.password);
+    const v = await session.test(params(), form.password, editing.value);
     testOk.value = `Conexión correcta · SQL Server ${v}`;
   } catch (e) {
     formError.value = (e as Error).message;
@@ -102,8 +117,9 @@ async function connect() {
   formError.value = null;
   busy.value = 'connect';
   try {
-    await session.connectNew(params(), form.password, form.remember);
+    await session.connectNew(params(), form.password, form.remember, editing.value);
     form.password = '';
+    editing.value = null;
     await afterConnect();
   } catch (e) {
     formError.value = (e as Error).message;
@@ -127,6 +143,7 @@ async function connectSaved(p: LocalProfile) {
 
 async function forget(p: { id: string; name: string }) {
   if (!confirm(`¿Olvidar la conexión "${p.name}"? Se borrará la contraseña guardada.`)) return;
+  if (editing.value?.id === p.id) newConnection();
   await session.forgetProfile(p.id);
   await session.loadServerProfiles().catch(() => {});
 }
@@ -178,6 +195,14 @@ async function forget(p: { id: string; name: string }) {
     </section>
 
     <form class="card p-6" @submit.prevent="connect">
+      <div v-if="editing" class="mb-4 flex items-start gap-3 rounded-lg border border-brand-100 bg-brand-50 p-3 text-sm text-slate-800">
+        <Icon name="edit" :size="18" class="mt-0.5 shrink-0" />
+        <div class="min-w-0 flex-1">
+          <div class="font-medium">Editando «{{ editing.name }}»</div>
+          <div class="text-xs text-slate-600">Al conectar se actualiza esta conexión y se conservan sus reportes, tags y jerarquías.</div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm shrink-0" @click="newConnection">Nueva conexión</button>
+      </div>
       <div class="grid gap-4 sm:grid-cols-6">
         <div class="sm:col-span-6">
           <label class="label" for="name">Nombre de la conexión (opcional)</label>
@@ -220,12 +245,19 @@ async function forget(p: { id: string; name: string }) {
         </div>
         <div :class="form.authType === 'ntlm' ? 'sm:col-span-6' : 'sm:col-span-3'">
           <label class="label" for="pwd">Contraseña</label>
-          <input id="pwd" v-model="form.password" type="password" class="input" autocomplete="current-password" />
+          <input
+            id="pwd"
+            v-model="form.password"
+            type="password"
+            class="input"
+            autocomplete="current-password"
+            :placeholder="editing?.clientSecret ? 'En blanco = usar la guardada' : ''"
+          />
         </div>
         <div class="flex flex-wrap gap-x-6 gap-y-2 text-sm sm:col-span-6">
           <label class="flex items-center gap-2"><input v-model="form.encrypt" type="checkbox" class="checkbox" /> Cifrar conexión (TLS)</label>
           <label class="flex items-center gap-2"><input v-model="form.trustServerCertificate" type="checkbox" class="checkbox" /> Confiar en el certificado del servidor</label>
-          <label class="flex items-center gap-2 font-medium"><input v-model="form.remember" type="checkbox" class="checkbox" /> Recordar conexión</label>
+          <label v-if="!editing" class="flex items-center gap-2 font-medium"><input v-model="form.remember" type="checkbox" class="checkbox" /> Recordar conexión</label>
         </div>
       </div>
 
@@ -241,7 +273,7 @@ async function forget(p: { id: string; name: string }) {
           <Icon :name="busy === 'test' ? 'refresh' : 'bolt'" :class="busy === 'test' && 'animate-spin'" /> Probar conexión
         </button>
         <button type="submit" class="btn btn-primary" :disabled="!!busy || !form.server || !form.username">
-          <Icon :name="busy === 'connect' ? 'refresh' : 'plug'" :class="busy === 'connect' && 'animate-spin'" /> Conectar
+          <Icon :name="busy === 'connect' ? 'refresh' : 'plug'" :class="busy === 'connect' && 'animate-spin'" /> {{ editing ? 'Guardar y conectar' : 'Conectar' }}
         </button>
       </div>
     </form>

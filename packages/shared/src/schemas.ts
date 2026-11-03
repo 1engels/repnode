@@ -23,10 +23,13 @@ export type ConnectionParams = z.infer<typeof connectionParamsSchema>;
 export const connectRequestSchema = z.union([
   z.object({
     params: connectionParamsSchema,
+    /** Al editar un perfil, vacía = reutilizar la contraseña guardada (requiere su clientSecret). */
     password: z.string(),
     remember: z.boolean().default(false),
     /** Secreto aleatorio generado y guardado por el navegador (base64). Requerido si remember = true. */
     clientSecret: z.string().min(32).max(200).optional(),
+    /** Perfil que se edita: conserva su ID (y con él reportes, tags y jerarquías) aunque cambien los parámetros. */
+    profileId: z.string().min(16).max(128).optional(),
   }),
   z.object({
     profileId: z.string().min(16).max(128),
@@ -119,6 +122,9 @@ export const timeZoneSchema = z.string().min(1).refine(isValidTimeZone, 'Zona ho
 export const selectionSchema = z.object({
   sourceIds: z.array(z.number().int()).default([]),
   tagIds: z.array(z.number().int()).default([]),
+  /** Nodos dinámicos de las jerarquías: tableros (con su aguas abajo) y espacios (con sus subespacios) */
+  panelIds: z.array(z.number().int()).default([]),
+  spaceIds: z.array(z.number().int()).default([]),
   quantityIds: z.array(z.number().int()).min(1, 'Selecciona al menos una medición').max(1000, 'Máximo 1000 mediciones por reporte'),
   range: rangeSchema,
   timezone: timeZoneSchema,
@@ -143,10 +149,8 @@ export type JobRequest = z.infer<typeof jobRequestSchema>;
 // ---------------------------------------------------------------------------
 
 /** Paleta base de tags. Los colores fuera de ella se guardan como personalizados del perfil. */
-export const TAG_PALETTE = [
-  '#2563eb', '#0284c7', '#0891b2', '#0d9488', '#16a34a', '#65a30d',
-  '#d97706', '#ea580c', '#dc2626', '#db2777', '#7c3aed', '#475569',
-] as const;
+/** Colores base de tags (y de tableros). Otro color se elige con el selector y queda como personalizado. */
+export const TAG_PALETTE = ['#2563eb', '#0891b2', '#0d9488', '#16a34a', '#d97706', '#dc2626', '#db2777', '#7c3aed'] as const;
 
 export const hexColorSchema = z
   .string()
@@ -169,6 +173,107 @@ export const tagColorSchema = z.object({ color: hexColorSchema });
 export const tagMembersSchema = z.object({
   sourceIds: z.array(z.number().int()).min(1),
   action: z.enum(['add', 'remove']),
+});
+
+/** Mismo contrato que los miembros de un tag: cargas de un tablero o medidores de un espacio. */
+export const hierarchyMembersSchema = tagMembersSchema;
+
+// ---------------------------------------------------------------------------
+// Jerarquías: Suministro (tableros con entradas y cargas) y Comercial (espacios)
+// ---------------------------------------------------------------------------
+
+const nodeName = z.string().trim().min(1, 'Nombre requerido').max(80).transform((s) => s.replace(/\s+/g, ' '));
+/** Texto opcional: vacío = null */
+const optionalText = (max: number) =>
+  z.string().trim().max(max).nullable().default(null).transform((s) => (s ? s.replace(/\s+/g, ' ') : null));
+const coord = z.number().nullable().default(null);
+
+/** sum = entradas simultáneas (se suman); ats = entradas alternativas (conmutación / respaldo) */
+export const panelModeSchema = z.enum(['sum', 'ats']);
+export type PanelMode = z.infer<typeof panelModeSchema>;
+
+export const PANEL_MODE_LABELS: Record<PanelMode, string> = {
+  sum: 'Cargas concurrentes (suma)',
+  ats: 'Conmutación / respaldo (ATS)',
+};
+
+export const MAX_PANEL_INPUTS = 16;
+
+/** Ícono del tablero según lo que alimenta (la GUI los dibuja con @tabler/icons-vue) */
+export const PANEL_ICONS = ['other', 'hvac', 'plug', 'lighting', 'store', 'elevator', 'motor'] as const;
+export const panelIconSchema = z.enum(PANEL_ICONS);
+export type PanelIcon = z.infer<typeof panelIconSchema>;
+
+export const PANEL_ICON_LABELS: Record<PanelIcon, string> = {
+  other: 'Otros',
+  hvac: 'HVAC',
+  plug: 'Tomacorrientes',
+  lighting: 'Iluminación',
+  store: 'Tiendas',
+  elevator: 'Ascensores',
+  motor: 'Bombas o motores',
+};
+
+/** Entrada (terminal virtual) de un tablero: viene de otro tablero o de una fuente externa. */
+export const panelInputSchema = z.object({
+  fromPanelId: z.number().int().nullable().default(null),
+  /** Fuente externa (p. ej. "Red pública", "Grupo electrógeno"), solo si no viene de un tablero */
+  origin: optionalText(80),
+  label: optionalText(60),
+  /** Medidor asociado a la entrada */
+  sourceId: z.number().int().nullable().default(null),
+});
+export type PanelInput = z.infer<typeof panelInputSchema>;
+
+export const panelSaveSchema = z.object({
+  name: nodeName,
+  mode: panelModeSchema.default('sum'),
+  description: optionalText(500),
+  inputs: z.array(panelInputSchema).max(MAX_PANEL_INPUTS, `Máximo ${MAX_PANEL_INPUTS} entradas por tablero`).default([]),
+  /** Medidor totalizador interno del tablero */
+  totalizerSourceId: z.number().int().nullable().default(null),
+  /** Color del encabezado de la caja en el diagrama (null = sin color) */
+  color: hexColorSchema.nullable().default(null),
+  icon: panelIconSchema.default('other'),
+});
+export type PanelSave = z.infer<typeof panelSaveSchema>;
+
+/** Al crear se pueden indicar las cargas iniciales y la posición en el diagrama (creación rápida). */
+export const panelCreateSchema = panelSaveSchema.extend({
+  sourceIds: z.array(z.number().int()).default([]),
+  x: coord,
+  y: coord,
+});
+
+export const SPACE_TYPES = ['Edificio', 'Piso', 'Zona', 'Local', 'Área común'] as const;
+
+export const spaceSaveSchema = z.object({
+  name: nodeName,
+  type: optionalText(40),
+  parentId: z.number().int().nullable().default(null),
+});
+export type SpaceSave = z.infer<typeof spaceSaveSchema>;
+
+export const spaceCreateSchema = spaceSaveSchema.extend({
+  sourceIds: z.array(z.number().int()).default([]),
+  x: coord,
+  y: coord,
+});
+
+export const hierarchyKindSchema = z.enum(['supply', 'commercial']);
+export type HierarchyKind = z.infer<typeof hierarchyKindSchema>;
+
+/** Posiciones de las cajas del diagrama; `reset` las borra para volver al layout automático. */
+export const hierarchyLayoutSchema = z.object({
+  kind: hierarchyKindSchema,
+  positions: z.array(z.object({ id: z.number().int(), x: z.number(), y: z.number() })).max(10000).default([]),
+  reset: z.boolean().default(false),
+});
+
+/** Saca medidores de una jerarquía (quedan "sin ubicar"). */
+export const hierarchyUnassignSchema = z.object({
+  kind: hierarchyKindSchema,
+  sourceIds: z.array(z.number().int()).min(1),
 });
 
 export const presetInputSchema = z.object({

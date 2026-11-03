@@ -32,7 +32,7 @@ const resolved = computed(() => {
     return null;
   }
 });
-const meters = computed(() => catalog.effectiveSourceIds(def.value.sourceIds, def.value.tagIds).length);
+const meters = computed(() => catalog.effectiveSourceIds(def.value).length);
 
 const validation = useValidation(
   () => (resolved.value && resolved.value.fromUtcMs < resolved.value.toUtcMs ? { reportId: props.report.id, rangeOverride: useOverride.value ? override.value : undefined } : null),

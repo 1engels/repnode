@@ -30,6 +30,8 @@ const f = props.state;
         <option value="none">Sin tags</option>
         <option v-for="t in catalog.tags" :key="t.id" :value="t.id">{{ t.name }} ({{ t.sourceIds.length }})</option>
       </select>
+      <!-- Selects propios de cada vista, junto a los comunes -->
+      <slot name="selects" />
       <label class="flex items-center gap-1.5 text-xs text-slate-600"><input v-model="f.onlyWithData" type="checkbox" class="checkbox" /> Solo con datos</label>
       <slot />
       <button v-if="active" type="button" class="btn btn-ghost btn-sm ml-auto text-slate-500" @click="emit('clear')"><Icon name="x" :size="12" /> Limpiar filtros</button>

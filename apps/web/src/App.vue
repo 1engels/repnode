@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import Icon from './components/Icon.vue';
 import ToastHost from './components/ToastHost.vue';
 import { useCatalogStore } from './stores/catalog';
@@ -12,6 +12,7 @@ const catalog = useCatalogStore();
 const reports = useReportsStore();
 const toast = useToastStore();
 const router = useRouter();
+const route = useRoute();
 
 async function disconnect() {
   try {
@@ -37,6 +38,7 @@ async function disconnect() {
         <nav v-if="session.connected" class="ml-4 flex items-center gap-1 text-sm">
           <RouterLink to="/reports" class="rounded-md px-3 py-1.5 text-slate-600 hover:bg-slate-100" active-class="!bg-brand-50 !text-brand-700 font-medium">Reportes</RouterLink>
           <RouterLink to="/tags" class="rounded-md px-3 py-1.5 text-slate-600 hover:bg-slate-100" active-class="!bg-brand-50 !text-brand-700 font-medium">Tags</RouterLink>
+          <RouterLink to="/hierarchy" class="rounded-md px-3 py-1.5 text-slate-600 hover:bg-slate-100" active-class="!bg-brand-50 !text-brand-700 font-medium">Jerarquías</RouterLink>
           <RouterLink to="/settings" class="rounded-md px-3 py-1.5 text-slate-600 hover:bg-slate-100" active-class="!bg-brand-50 !text-brand-700 font-medium">Configuración</RouterLink>
         </nav>
         <div class="ml-auto flex items-center gap-3">
@@ -52,7 +54,7 @@ async function disconnect() {
         </div>
       </div>
     </header>
-    <main class="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
+    <main class="mx-auto w-full flex-1 px-4 py-6" :class="route.meta.wide ? 'max-w-[1920px] py-4' : 'max-w-7xl'">
       <RouterView />
     </main>
     <ToastHost />

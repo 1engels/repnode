@@ -6,3 +6,4 @@ export * from './filename.ts';
 export * from './list-selection.ts';
 export * from './grid.ts';
 export * from './timestamp-layout.ts';
+export * from './hierarchy.ts';

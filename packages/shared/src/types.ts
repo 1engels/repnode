@@ -1,4 +1,4 @@
-import type { ConnectionParams, ReportDefinition, Settings } from './schemas.ts';
+import type { ConnectionParams, PanelIcon, PanelMode, ReportDefinition, Settings } from './schemas.ts';
 
 export interface ProfileDTO extends ConnectionParams {
   id: string;
@@ -47,6 +47,56 @@ export interface TagDTO {
   sourceIds: number[];
   /** Miembros guardados que ya no existen en la BD */
   missing: number;
+}
+
+export interface PanelInputDTO {
+  id: number;
+  fromPanelId: number | null;
+  origin: string | null;
+  label: string | null;
+  /** Medidor asociado (null si no tiene o si ya no existe en la BD) */
+  sourceId: number | null;
+  /** Tenía un medidor guardado que ya no existe en la BD */
+  missingMeter: boolean;
+}
+
+export interface PanelDTO {
+  id: number;
+  name: string;
+  mode: PanelMode;
+  description: string | null;
+  /** Posición en el diagrama; null = la calcula el layout automático */
+  x: number | null;
+  y: number | null;
+  /** En orden: la primera entrada que viene de un tablero es la primaria */
+  inputs: PanelInputDTO[];
+  /** Medidor totalizador interno del tablero */
+  totalizerSourceId: number | null;
+  /** Tenía un totalizador guardado que ya no existe en la BD */
+  missingTotalizer: boolean;
+  /** Salidas (cargas y alimentadores de otros tableros) */
+  loadSourceIds: number[];
+  /** Salidas guardadas que ya no existen en la BD */
+  missing: number;
+  /** Color del encabezado (#rrggbb) o null */
+  color: string | null;
+  icon: PanelIcon;
+}
+
+export interface SpaceDTO {
+  id: number;
+  parentId: number | null;
+  name: string;
+  type: string | null;
+  x: number | null;
+  y: number | null;
+  sourceIds: number[];
+  missing: number;
+}
+
+export interface HierarchyDTO {
+  panels: PanelDTO[];
+  spaces: SpaceDTO[];
 }
 
 export interface PresetDTO {

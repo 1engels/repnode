@@ -43,7 +43,14 @@ function rangeText(r: ReportDTO): string {
 }
 
 function meterCount(r: ReportDTO): number {
-  return catalog.effectiveSourceIds(r.definition.sourceIds, r.definition.tagIds).length;
+  return catalog.effectiveSourceIds(r.definition).length;
+}
+
+/** "+2 tags, +1 nodo": cuántos tags y nodos dinámicos aportan medidores */
+function dynamicLabel(r: ReportDTO): string {
+  const tags = r.definition.tagIds.length;
+  const nodes = (r.definition.panelIds?.length ?? 0) + (r.definition.spaceIds?.length ?? 0);
+  return [tags && `+${tags} tag${tags > 1 ? 's' : ''}`, nodes && `+${nodes} nodo${nodes > 1 ? 's' : ''}`].filter(Boolean).join(', ');
 }
 
 async function duplicate(r: ReportDTO) {
@@ -111,7 +118,7 @@ const statusLabel: Record<string, string> = { done: 'Completado', error: 'Error'
         <dl class="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
           <dt class="text-slate-500">Medidores</dt>
           <dd class="text-right font-medium">
-            {{ formatNumber(meterCount(r)) }}<span v-if="r.definition.tagIds.length" class="text-slate-500"> (+{{ r.definition.tagIds.length }} tag)</span>
+            {{ formatNumber(meterCount(r)) }}<span v-if="dynamicLabel(r)" class="text-slate-500"> ({{ dynamicLabel(r) }})</span>
           </dd>
           <dt class="text-slate-500">Mediciones</dt><dd class="text-right font-medium">{{ r.definition.quantityIds.length }}</dd>
           <dt class="text-slate-500">Rango</dt><dd class="truncate text-right font-medium">{{ rangeText(r) }}</dd>

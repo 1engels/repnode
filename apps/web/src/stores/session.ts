@@ -16,6 +16,14 @@ export interface LocalProfile extends ConnectionParams {
   lastUsedAt: string;
 }
 
+/** Perfil que se está editando en el formulario: al conectar se actualiza conservando su ID. */
+export interface ProfileEdit {
+  id: string;
+  name: string;
+  /** Secreto de cliente de este navegador; null si el perfil no tiene la llave aquí (hay que escribir la contraseña). */
+  clientSecret: string | null;
+}
+
 export const useSessionStore = defineStore('session', () => {
   const session = ref<SessionDTO>({ connected: false, profileId: null, server: null, database: null, username: null, serverVersion: null });
   const checked = ref(false);
@@ -45,11 +53,14 @@ export const useSessionStore = defineStore('session', () => {
     localProfiles.value = [entry, ...localProfiles.value.filter((x) => x.id !== p.id)];
   }
 
-  async function connectNew(params: ConnectionParams, password: string, remember: boolean): Promise<void> {
-    const clientSecret = remember ? randomSecret() : undefined;
-    const res = await post<{ session: SessionDTO; profile: ProfileDTO }>('/api/connection/connect', { params, password, remember, clientSecret });
+  async function connectNew(params: ConnectionParams, password: string, remember: boolean, edit: ProfileEdit | null = null): Promise<void> {
+    // Al editar se reutiliza el secreto existente para poder dejar la contraseña en blanco (usa la guardada).
+    const clientSecret = edit ? (edit.clientSecret ?? randomSecret()) : remember ? randomSecret() : undefined;
+    const res = await post<{ session: SessionDTO; profile: ProfileDTO }>('/api/connection/connect', {
+      params, password, remember: remember || !!edit, clientSecret, profileId: edit?.id,
+    });
     session.value = res.session;
-    if (remember && clientSecret) rememberLocal(res.profile, clientSecret);
+    if ((remember || edit) && clientSecret) rememberLocal(res.profile, clientSecret);
   }
 
   async function connectProfile(p: LocalProfile): Promise<void> {
@@ -58,8 +69,8 @@ export const useSessionStore = defineStore('session', () => {
     rememberLocal(res.profile, p.clientSecret);
   }
 
-  async function test(params: ConnectionParams, password: string): Promise<string> {
-    const r = await post<{ version: string }>('/api/connection/test', { params, password });
+  async function test(params: ConnectionParams, password: string, edit: ProfileEdit | null = null): Promise<string> {
+    const r = await post<{ version: string }>('/api/connection/test', { params, password, profileId: edit?.id, clientSecret: edit?.clientSecret ?? undefined });
     return r.version;
   }
 

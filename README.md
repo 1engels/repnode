@@ -9,6 +9,23 @@ Flujos:
 - Conectar → elegir reporte guardado → **Generar CSV**
 - Conectar → nuevo reporte → medidores → mediciones → rango y zona horaria → salida → **Generar CSV**
 
+### Jerarquías de medidores
+
+En **Jerarquías** se ordenan los medidores en dos estructuras independientes de los tags:
+
+- **Suministro** (circuitos): tableros con *fuentes de entrada* (cada una viene de otro tablero o de una fuente externa
+  como la red pública o un grupo electrógeno, con su medidor asociado), *cargas* y modo **Suma** (entradas simultáneas)
+  o **ATS** (conmutación / respaldo). Un tablero puede alimentarse desde varios tableros.
+- **Comercial** (espacios físicos): edificio › piso › zona…, con los medidores de cada espacio.
+
+El editor es un diagrama: se conectan salidas con entradas, se arrastran medidores (uno o una selección) sobre las cajas
+o al lienzo vacío para crear un nodo nuevo, y un panel lista los problemas del diseño (entradas sin medidor, tableros sin
+alimentación, ATS con una sola entrada…). Cada medidor ocupa un solo lugar por jerarquía.
+
+En el paso 1 de un reporte, el botón **Árbol** muestra los medidores por Suministro o por Comercial. Marcar un tablero o
+un espacio lo agrega como **nodo dinámico**: al generar entran sus medidores actuales, con todo su aguas abajo o sus
+subespacios.
+
 ## Requisitos
 
 - Node.js **24+** (ejecuta TypeScript directamente; incluye `node:sqlite`, sin módulos nativos)
@@ -35,7 +52,7 @@ Variables opcionales (`apps/server/.env.local`): `REPNODE_PORT`, `REPNODE_DATA_D
 ```
 packages/shared   esquemas zod, tipos de API, zonas horarias (Intl), rangos relativos, nombres de archivo
 apps/server       Fastify · mssql/tedious · node:sqlite · worker_threads
-apps/web          Vite 8 · Vue 3 (composition API) · Tailwind v4 · Pinia · listas virtualizadas
+apps/web          Vite 8 · Vue 3 (composition API) · Tailwind v4 · Pinia · listas virtualizadas · Vue Flow + elkjs (diagrama de jerarquías)
 ```
 
 ### Por qué es más rápido que el software anterior
@@ -87,8 +104,10 @@ UTF-8 con BOM, CRLF y comillas RFC 4180. Separador y decimal configurables (por 
 ### Credenciales
 
 La contraseña se cifra con AES-256-GCM. La clave se deriva (HKDF-SHA256) de `data/master.key`, que está en el servidor
-local, y de un secreto aleatorio que solo guarda el navegador (`localStorage`). El ID de cada perfil es un hash SHA-256
-de servidor, puerto, BD y usuario. El navegador nunca guarda la contraseña. El backend solo escucha en `127.0.0.1`.
+local, y de un secreto aleatorio que solo guarda el navegador (`localStorage`). El ID de cada perfil nace como un hash
+SHA-256 de servidor, puerto, BD y usuario, y se conserva al editar la conexión (por ejemplo, si cambió la IP del
+servidor), así que sus reportes, tags y jerarquías se mantienen. Al editar se puede dejar la contraseña en blanco para
+usar la guardada. El navegador nunca guarda la contraseña. El backend solo escucha en `127.0.0.1`.
 
 ## Pruebas
 

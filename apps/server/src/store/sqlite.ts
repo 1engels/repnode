@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { availableParallelism } from 'node:os';
-import type { ConnectionParams, HistoryEntryDTO, JobStatus, ReportDefinition, Settings } from '@repnode/shared';
+import { reportDefinitionSchema } from '@repnode/shared';
+import type { ConnectionParams, HierarchyKind, HistoryEntryDTO, JobStatus, PanelIcon, PanelMode, ReportDefinition, Settings } from '@repnode/shared';
 import { paths } from '../config.ts';
 import type { EncryptedSecret } from '../security/secrets.ts';
 
@@ -89,6 +90,66 @@ const migrations: string[] = [
   `
   ALTER TABLE job_history ADD COLUMN forced INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE job_history ADD COLUMN off_grid_rows INTEGER NOT NULL DEFAULT 0;
+  `,
+  // v4: jerarquías de Suministro (tableros con entradas y cargas) y Comercial (espacios)
+  `
+  CREATE TABLE panels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'sum',
+    description TEXT,
+    x REAL,
+    y REAL,
+    UNIQUE (profile_id, name)
+  );
+  CREATE TABLE panel_inputs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    panel_id INTEGER NOT NULL REFERENCES panels(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    from_panel_id INTEGER REFERENCES panels(id) ON DELETE SET NULL,
+    origin TEXT,
+    label TEXT,
+    source_name TEXT
+  );
+  CREATE INDEX ix_panel_inputs_panel ON panel_inputs(panel_id, position);
+  CREATE TABLE panel_loads (
+    panel_id INTEGER NOT NULL REFERENCES panels(id) ON DELETE CASCADE,
+    profile_id TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    PRIMARY KEY (panel_id, source_name),
+    UNIQUE (profile_id, source_name)
+  );
+  CREATE TABLE spaces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_id TEXT NOT NULL,
+    parent_id INTEGER REFERENCES spaces(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    type TEXT,
+    x REAL,
+    y REAL
+  );
+  CREATE INDEX ix_spaces_profile ON spaces(profile_id);
+  CREATE TABLE space_members (
+    space_id INTEGER NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    profile_id TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    PRIMARY KEY (space_id, source_name),
+    UNIQUE (profile_id, source_name)
+  );
+  `,
+  // v5: totalizador interno del tablero. El medidor de una entrada desde otro tablero pasa a ser una salida de ese
+  // tablero (la entrada solo lo referencia, así quitar la entrada no lo saca del tablero de origen)
+  `
+  ALTER TABLE panels ADD COLUMN totalizer_name TEXT;
+  INSERT OR IGNORE INTO panel_loads (panel_id, profile_id, source_name)
+    SELECT i.from_panel_id, p.profile_id, i.source_name FROM panel_inputs i JOIN panels p ON p.id = i.panel_id
+    WHERE i.from_panel_id IS NOT NULL AND i.source_name IS NOT NULL;
+  `,
+  // v6: color del encabezado e ícono del tablero en el diagrama
+  `
+  ALTER TABLE panels ADD COLUMN color TEXT;
+  ALTER TABLE panels ADD COLUMN icon TEXT NOT NULL DEFAULT 'other';
   `,
 ];
 
@@ -284,6 +345,226 @@ export const tagColors = {
 };
 
 // ---------------------------------------------------------------------------
+// Jerarquía de Suministro: tableros, entradas (terminales virtuales) y cargas.
+// Un medidor está en un solo lugar por perfil: entrada de un tablero o carga de uno.
+// ---------------------------------------------------------------------------
+
+export interface PanelInputRow {
+  id: number;
+  fromPanelId: number | null;
+  origin: string | null;
+  label: string | null;
+  sourceName: string | null;
+}
+
+export interface PanelRow {
+  id: number;
+  name: string;
+  mode: PanelMode;
+  description: string | null;
+  x: number | null;
+  y: number | null;
+  inputs: PanelInputRow[];
+  loads: string[];
+  totalizer: string | null;
+  color: string | null;
+  icon: string;
+}
+
+export interface PanelFields {
+  name: string;
+  mode: PanelMode;
+  description: string | null;
+  color: string | null;
+  icon: PanelIcon;
+}
+
+export const panels = {
+  list(profileId: string): PanelRow[] {
+    const rows = db.prepare('SELECT id, name, mode, description, x, y, totalizer_name AS totalizer, color, icon FROM panels WHERE profile_id = ?').all(profileId) as unknown as Omit<PanelRow, 'inputs' | 'loads'>[];
+    const inputs = db
+      .prepare(
+        `SELECT i.id, i.panel_id, i.from_panel_id, i.origin, i.label, i.source_name FROM panel_inputs i
+         JOIN panels p ON p.id = i.panel_id WHERE p.profile_id = ? ORDER BY i.panel_id, i.position`,
+      )
+      .all(profileId) as unknown as { id: number; panel_id: number; from_panel_id: number | null; origin: string | null; label: string | null; source_name: string | null }[];
+    const loads = db.prepare('SELECT panel_id, source_name FROM panel_loads WHERE profile_id = ?').all(profileId) as unknown as { panel_id: number; source_name: string }[];
+    const byPanel = new Map(rows.map((r) => [r.id, { ...r, inputs: [] as PanelInputRow[], loads: [] as string[] }]));
+    for (const i of inputs) {
+      byPanel.get(i.panel_id)?.inputs.push({ id: i.id, fromPanelId: i.from_panel_id, origin: i.origin, label: i.label, sourceName: i.source_name });
+    }
+    for (const l of loads) byPanel.get(l.panel_id)?.loads.push(l.source_name);
+    return [...byPanel.values()];
+  },
+  create(profileId: string, f: PanelFields, x: number | null, y: number | null): number {
+    return Number(
+      db
+        .prepare('INSERT INTO panels (profile_id, name, mode, description, color, icon, x, y) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(profileId, f.name, f.mode, f.description, f.color, f.icon, x, y).lastInsertRowid,
+    );
+  },
+  update(profileId: string, id: number, f: PanelFields): boolean {
+    return (
+      db
+        .prepare('UPDATE panels SET name = ?, mode = ?, description = ?, color = ?, icon = ? WHERE id = ? AND profile_id = ?')
+        .run(f.name, f.mode, f.description, f.color, f.icon, id, profileId).changes > 0
+    );
+  },
+  /**
+   * Reemplaza las entradas y el totalizador (las rutas ya validaron los conflictos). El medidor de una entrada desde X
+   * queda como salida de X (si ya lo era y alimenta a otros tableros, sigue igual: derivación); el de una entrada externa
+   * y el totalizador dejan de ser salidas de cualquier tablero.
+   */
+  setInputs(profileId: string, id: number, inputs: Omit<PanelInputRow, 'id'>[], totalizer: string | null): void {
+    const ins = db.prepare('INSERT INTO panel_inputs (panel_id, position, from_panel_id, origin, label, source_name) VALUES (?, ?, ?, ?, ?, ?)');
+    const unload = db.prepare('DELETE FROM panel_loads WHERE profile_id = ? AND source_name = ?');
+    const load = db.prepare('INSERT INTO panel_loads (panel_id, profile_id, source_name) VALUES (?, ?, ?)');
+    db.prepare('DELETE FROM panel_inputs WHERE panel_id = ?').run(id);
+    inputs.forEach((i, pos) => {
+      ins.run(id, pos, i.fromPanelId, i.fromPanelId == null ? i.origin : null, i.label, i.sourceName);
+      if (!i.sourceName) return;
+      unload.run(profileId, i.sourceName);
+      if (i.fromPanelId != null) load.run(i.fromPanelId, profileId, i.sourceName);
+    });
+    db.prepare('UPDATE panels SET totalizer_name = ? WHERE id = ?').run(totalizer, id);
+    if (totalizer) unload.run(profileId, totalizer);
+  },
+  /** Las entradas que venían del tablero eliminado pasan a ser una fuente externa con su nombre. */
+  remove(profileId: string, id: number): boolean {
+    return transaction(() => {
+      const row = db.prepare('SELECT name FROM panels WHERE id = ? AND profile_id = ?').get(id, profileId) as { name: string } | undefined;
+      if (!row) return false;
+      db.prepare('UPDATE panel_inputs SET from_panel_id = NULL, origin = ? WHERE from_panel_id = ?').run(row.name, id);
+      db.prepare('DELETE FROM panels WHERE id = ?').run(id);
+      return true;
+    });
+  },
+  owns(profileId: string, id: number): boolean {
+    return !!db.prepare('SELECT 1 FROM panels WHERE id = ? AND profile_id = ?').get(id, profileId);
+  },
+  /**
+   * Agrega salidas (un lugar por medidor): las quita de otro tablero, de una entrada externa o de un totalizador.
+   * Una entrada que la referenciaba desde otro tablero queda sin medidor (ya no es salida de su origen).
+   */
+  addLoads(profileId: string, id: number, sourceNames: string[]): void {
+    const unload = db.prepare('DELETE FROM panel_loads WHERE profile_id = ? AND source_name = ?');
+    const unref = db.prepare(
+      `UPDATE panel_inputs SET source_name = NULL WHERE source_name = ? AND (from_panel_id IS NULL OR from_panel_id != ?)
+         AND panel_id IN (SELECT id FROM panels WHERE profile_id = ?)`,
+    );
+    const untotal = db.prepare('UPDATE panels SET totalizer_name = NULL WHERE profile_id = ? AND totalizer_name = ?');
+    const ins = db.prepare('INSERT INTO panel_loads (panel_id, profile_id, source_name) VALUES (?, ?, ?)');
+    sourceNames.forEach((n) => {
+      unload.run(profileId, n);
+      unref.run(n, id, profileId);
+      untotal.run(profileId, n);
+      ins.run(id, profileId, n);
+    });
+  },
+  /** Quita salidas; la entrada de otro tablero que alimentaban queda sin medidor. */
+  removeLoads(id: number, sourceNames: string[]): void {
+    const stmt = db.prepare('DELETE FROM panel_loads WHERE panel_id = ? AND source_name = ?');
+    const unref = db.prepare('UPDATE panel_inputs SET source_name = NULL WHERE from_panel_id = ? AND source_name = ?');
+    sourceNames.forEach((n) => {
+      stmt.run(id, n);
+      unref.run(id, n);
+    });
+  },
+  /** Saca los medidores de Suministro: salidas, entradas (quedan sin medidor) y totalizadores. */
+  unassign(profileId: string, sourceNames: string[]): void {
+    const unload = db.prepare('DELETE FROM panel_loads WHERE profile_id = ? AND source_name = ?');
+    const unset = db.prepare('UPDATE panel_inputs SET source_name = NULL WHERE source_name = ? AND panel_id IN (SELECT id FROM panels WHERE profile_id = ?)');
+    const untotal = db.prepare('UPDATE panels SET totalizer_name = NULL WHERE profile_id = ? AND totalizer_name = ?');
+    sourceNames.forEach((n) => {
+      unload.run(profileId, n);
+      unset.run(n, profileId);
+      untotal.run(profileId, n);
+    });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Jerarquía Comercial: espacios físicos en árbol; un medidor pertenece a un solo espacio.
+// ---------------------------------------------------------------------------
+
+export interface SpaceRow {
+  id: number;
+  parentId: number | null;
+  name: string;
+  type: string | null;
+  x: number | null;
+  y: number | null;
+  members: string[];
+}
+
+export interface SpaceFields {
+  name: string;
+  type: string | null;
+  parentId: number | null;
+}
+
+export const spaces = {
+  list(profileId: string): SpaceRow[] {
+    const rows = db.prepare('SELECT id, parent_id, name, type, x, y FROM spaces WHERE profile_id = ?').all(profileId) as unknown as
+      { id: number; parent_id: number | null; name: string; type: string | null; x: number | null; y: number | null }[];
+    const members = db.prepare('SELECT space_id, source_name FROM space_members WHERE profile_id = ?').all(profileId) as unknown as { space_id: number; source_name: string }[];
+    const bySpace = new Map(rows.map((r) => [r.id, { id: r.id, parentId: r.parent_id, name: r.name, type: r.type, x: r.x, y: r.y, members: [] as string[] }]));
+    for (const m of members) bySpace.get(m.space_id)?.members.push(m.source_name);
+    return [...bySpace.values()];
+  },
+  create(profileId: string, f: SpaceFields, x: number | null, y: number | null): number {
+    return Number(
+      db.prepare('INSERT INTO spaces (profile_id, parent_id, name, type, x, y) VALUES (?, ?, ?, ?, ?, ?)').run(profileId, f.parentId, f.name, f.type, x, y).lastInsertRowid,
+    );
+  },
+  update(profileId: string, id: number, f: SpaceFields): boolean {
+    return db.prepare('UPDATE spaces SET name = ?, type = ?, parent_id = ? WHERE id = ? AND profile_id = ?').run(f.name, f.type, f.parentId, id, profileId).changes > 0;
+  },
+  /** Los subespacios y medidores del espacio eliminado suben a su padre (sin padre, los medidores quedan sin ubicar). */
+  remove(profileId: string, id: number): boolean {
+    return transaction(() => {
+      const row = db.prepare('SELECT parent_id FROM spaces WHERE id = ? AND profile_id = ?').get(id, profileId) as { parent_id: number | null } | undefined;
+      if (!row) return false;
+      db.prepare('UPDATE spaces SET parent_id = ? WHERE parent_id = ?').run(row.parent_id, id);
+      if (row.parent_id != null) db.prepare('UPDATE space_members SET space_id = ? WHERE space_id = ?').run(row.parent_id, id);
+      db.prepare('DELETE FROM spaces WHERE id = ?').run(id);
+      return true;
+    });
+  },
+  owns(profileId: string, id: number): boolean {
+    return !!db.prepare('SELECT 1 FROM spaces WHERE id = ? AND profile_id = ?').get(id, profileId);
+  },
+  /** Agregar un medidor lo quita de su espacio anterior. */
+  addMembers(profileId: string, id: number, sourceNames: string[]): void {
+    const unset = db.prepare('DELETE FROM space_members WHERE profile_id = ? AND source_name = ?');
+    const ins = db.prepare('INSERT INTO space_members (space_id, profile_id, source_name) VALUES (?, ?, ?)');
+    sourceNames.forEach((n) => {
+      unset.run(profileId, n);
+      ins.run(id, profileId, n);
+    });
+  },
+  removeMembers(id: number, sourceNames: string[]): void {
+    const stmt = db.prepare('DELETE FROM space_members WHERE space_id = ? AND source_name = ?');
+    sourceNames.forEach((n) => stmt.run(id, n));
+  },
+  unassign(profileId: string, sourceNames: string[]): void {
+    const stmt = db.prepare('DELETE FROM space_members WHERE profile_id = ? AND source_name = ?');
+    sourceNames.forEach((n) => stmt.run(profileId, n));
+  },
+};
+
+/** Posiciones de las cajas del diagrama (null = layout automático). */
+export const hierarchyLayout = {
+  set(profileId: string, kind: HierarchyKind, positions: { id: number; x: number; y: number }[]): void {
+    const stmt = db.prepare(`UPDATE ${kind === 'supply' ? 'panels' : 'spaces'} SET x = ?, y = ? WHERE id = ? AND profile_id = ?`);
+    transaction(() => positions.forEach((p) => stmt.run(p.x, p.y, p.id, profileId)));
+  },
+  reset(profileId: string, kind: HierarchyKind): void {
+    db.prepare(`UPDATE ${kind === 'supply' ? 'panels' : 'spaces'} SET x = NULL, y = NULL WHERE profile_id = ?`).run(profileId);
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Presets de mediciones (guardados por Quantity.Name)
 // ---------------------------------------------------------------------------
 
@@ -325,10 +606,17 @@ export interface StoredReport {
   updatedAt: string;
 }
 
+/** Se vuelve a pasar por el esquema para completar campos nuevos (p. ej. panelIds) en reportes antiguos. */
+function parseDefinition(json: string): ReportDefinition {
+  const raw = JSON.parse(json) as ReportDefinition;
+  const parsed = reportDefinitionSchema.safeParse(raw);
+  return parsed.success ? parsed.data : raw;
+}
+
 const toReport = (r: ReportRow): StoredReport => ({
   id: r.id,
   name: r.name,
-  definition: JSON.parse(r.definition_json) as ReportDefinition,
+  definition: parseDefinition(r.definition_json),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });

@@ -8,6 +8,7 @@ import { initJobs, shutdownJobs } from './jobs/job-manager.ts';
 import { disconnect } from './mssql/session.ts';
 import catalogRoutes from './routes/catalog.ts';
 import connectionRoutes from './routes/connection.ts';
+import hierarchyRoutes from './routes/hierarchy.ts';
 import reportRoutes from './routes/reports.ts';
 import { loadOrCreateMasterKey } from './security/secrets.ts';
 
@@ -47,6 +48,7 @@ initJobs(app.log);
 
 await app.register(connectionRoutes, { masterKey });
 await app.register(catalogRoutes);
+await app.register(hierarchyRoutes);
 await app.register(reportRoutes);
 
 // En producción el backend sirve el frontend compilado (un solo proceso)

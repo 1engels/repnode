@@ -59,3 +59,15 @@ export function profileIdFor(p: Pick<ConnectionParams, 'server' | 'port' | 'inst
     .join('|');
   return createHash('sha256').update(key).digest('hex');
 }
+
+/**
+ * ID para una conexión nueva. El ID de un perfil no cambia al editarlo (sus datos quedan asociados), así que el hash
+ * de los parámetros puede no coincidir con su ID: si un perfil guardado tiene hoy esos parámetros se reutiliza su ID;
+ * si el hash lo ocupa un perfil editado con otros parámetros, se genera uno aleatorio.
+ */
+export function idForNewProfile(params: Parameters<typeof profileIdFor>[0], stored: { id: string; params: Parameters<typeof profileIdFor>[0] }[]): string {
+  const hash = profileIdFor(params);
+  const match = stored.find((p) => profileIdFor(p.params) === hash);
+  if (match) return match.id;
+  return stored.some((p) => p.id === hash) ? randomBytes(32).toString('hex') : hash;
+}

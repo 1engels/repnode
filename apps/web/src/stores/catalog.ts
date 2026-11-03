@@ -4,9 +4,18 @@ import { TAG_PALETTE, type CatalogDTO, type PresetDTO, type QuantityDTO, type So
 import { del, get, post, put } from '../lib/api';
 import { notifyTagsChanged, onTagsChanged } from '../lib/tagSync';
 import { normalize } from '../lib/util';
+import { useHierarchyStore } from './hierarchy';
 
 export interface IndexedSource extends SourceDTO {
   search: string;
+}
+
+/** Selección de medidores de un reporte (los nodos son opcionales en reportes guardados antes de las jerarquías). */
+export interface MeterSelection {
+  sourceIds: number[];
+  tagIds: number[];
+  panelIds?: number[];
+  spaceIds?: number[];
 }
 
 export const useCatalogStore = defineStore('catalog', () => {
@@ -63,6 +72,8 @@ export const useCatalogStore = defineStore('catalog', () => {
         get<string[]>('/api/tag-colors'),
         get<PresetDTO[]>('/api/presets'),
       ]);
+      // Con el catálogo nuevo cambian los IDs resueltos de las jerarquías
+      await useHierarchyStore().load();
       catalog.value = c;
       setTags(t);
       tagColors.value = colors;
@@ -74,15 +85,19 @@ export const useCatalogStore = defineStore('catalog', () => {
 
   function reset(): void {
     catalog.value = null;
+    useHierarchyStore().reset();
     setTags([]);
     tagColors.value = [];
     presets.value = [];
   }
 
-  /** Medidores efectivos: selección directa + miembros de tags dinámicos, en orden del catálogo. */
-  function effectiveSourceIds(sourceIds: number[], tagIds: number[]): number[] {
-    const set = new Set(sourceIds.filter((id) => sourceById.value.has(id)));
-    for (const tid of tagIds) tagById.value.get(tid)?.sourceIds.forEach((id) => set.add(id));
+  /** Medidores efectivos: selección directa + tags dinámicos + nodos dinámicos de las jerarquías, en orden del catálogo. */
+  function effectiveSourceIds(sel: MeterSelection): number[] {
+    const set = new Set(sel.sourceIds.filter((id) => sourceById.value.has(id)));
+    for (const tid of sel.tagIds) tagById.value.get(tid)?.sourceIds.forEach((id) => set.add(id));
+    const h = useHierarchyStore();
+    if (sel.panelIds?.length) h.panelSources(sel.panelIds).forEach((id) => set.add(id));
+    if (sel.spaceIds?.length) h.spaceSources(sel.spaceIds).forEach((id) => set.add(id));
     return sources.value.filter((s) => set.has(s.id)).map((s) => s.id);
   }
 

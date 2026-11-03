@@ -8,39 +8,82 @@ import MeterFilterBar from './MeterFilterBar.vue';
 import MeterLabel from './MeterLabel.vue';
 import PasteListModal from './PasteListModal.vue';
 import TagChip from './TagChip.vue';
+import MeterTree from './meter-tree.vue';
 import { useCatalogStore, type IndexedSource } from '../stores/catalog';
+import { useHierarchyStore } from '../stores/hierarchy';
 import { useToastStore } from '../stores/toast';
 import { useMeterFilters } from '../lib/useMeterFilters';
 import { formatNumber } from '../lib/util';
 import { meterErrorCount, meterIssueTooltip } from '../lib/issues';
 
-// Lista única de medidores del reporte: casillas = selección directa; los tags del reporte
-// (dinámicos) suman sus miembros al generar. Los tags se administran en /tags.
+// Medidores del reporte en lista o en árbol (Suministro / Comercial): casillas de medidor = selección
+// directa; los tags y nodos del reporte (dinámicos) suman sus medidores al generar.
+// Los tags se administran en /tags y las jerarquías en /hierarchy.
 const props = defineProps<{ issues: Map<number, MeterValidation>; timezone?: string }>();
 const sourceIds = defineModel<number[]>('sourceIds', { required: true });
 const tagIds = defineModel<number[]>('tagIds', { required: true });
+const panelIds = defineModel<number[]>('panelIds', { required: true });
+const spaceIds = defineModel<number[]>('spaceIds', { required: true });
 
 const catalog = useCatalogStore();
+const hierarchy = useHierarchyStore();
 const toast = useToastStore();
 const router = useRouter();
 const tagsHref = router.resolve({ name: 'tags' }).href;
+const hierarchyHref = router.resolve({ name: 'hierarchy' }).href;
 
 const direct = computed(() => new Set(sourceIds.value));
-const effective = computed(() => new Set(catalog.effectiveSourceIds(sourceIds.value, tagIds.value)));
+const effective = computed(
+  () => new Set(catalog.effectiveSourceIds({ sourceIds: sourceIds.value, tagIds: tagIds.value, panelIds: panelIds.value, spaceIds: spaceIds.value })),
+);
 
-/** Medidor → nombres de los tags del reporte que lo incluyen */
+/** Medidor → nombres de los tags y nodos del reporte que lo incluyen */
 const viaTags = computed(() => {
   const m = new Map<number, string[]>();
-  for (const tid of tagIds.value) {
-    const t = catalog.tagById.get(tid);
-    if (!t) continue;
-    for (const sid of t.sourceIds) {
+  const add = (ids: Iterable<number>, name: string) => {
+    for (const sid of ids) {
       let arr = m.get(sid);
       if (!arr) m.set(sid, (arr = []));
-      arr.push(t.name);
+      arr.push(name);
     }
+  };
+  for (const tid of tagIds.value) {
+    const t = catalog.tagById.get(tid);
+    if (t) add(t.sourceIds, t.name);
+  }
+  for (const pid of panelIds.value) {
+    const p = hierarchy.panelById.get(pid);
+    if (p) add(hierarchy.panelSources([pid]), p.name);
+  }
+  for (const id of spaceIds.value) {
+    const s = hierarchy.spaceById.get(id);
+    if (s) add(hierarchy.spaceSources([id]), s.name);
   }
   return m;
+});
+
+// ---------------------------------------------------------------------------
+// Presentación: lista o árbol (se recuerda en este navegador)
+// ---------------------------------------------------------------------------
+type Layout = 'list' | 'supply' | 'commercial';
+const LAYOUT_KEY = 'repnode.meterPicker.layout';
+function readLayout(): Layout {
+  try {
+    const v = localStorage.getItem(LAYOUT_KEY);
+    return v === 'supply' || v === 'commercial' ? v : 'list';
+  } catch {
+    return 'list';
+  }
+}
+const layout = ref<Layout>(readLayout());
+const lastTree = ref<'supply' | 'commercial'>(layout.value === 'commercial' ? 'commercial' : 'supply');
+watch(layout, (v) => {
+  if (v !== 'list') lastTree.value = v;
+  try {
+    localStorage.setItem(LAYOUT_KEY, v);
+  } catch {
+    // sin almacenamiento local: solo dura la sesión
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -57,6 +100,8 @@ const filters = useMeterFilters({ onlyWithData: true }, () => {
 });
 const filtered = filters.filtered;
 const ids = computed(() => filtered.value.map((s) => s.id));
+// En el árbol, "Solo con datos" no cuenta como búsqueda: no poda ramas ni expande todo
+const treeFiltering = computed(() => !!(filters.state.query || filters.state.group || filters.state.model || filters.state.tag !== '') || view.value !== 'all');
 
 const issueCounts = computed(() => {
   let errors = 0;
@@ -79,15 +124,24 @@ const filteredDirectCount = computed(() => filtered.value.reduce((n, s) => n + (
 // ---------------------------------------------------------------------------
 const anchor = shallowRef<number | null>(null);
 
+function warnDynamic(id: number): boolean {
+  if (direct.value.has(id) || !viaTags.value.has(id)) return false;
+  toast.info(`Incluido por «${viaTags.value.get(id)!.join('», «')}». Quítalo de los tags o nodos del reporte para excluirlo.`);
+  return true;
+}
+
 function toggle(index: number, e: MouseEvent) {
   const id = ids.value[index];
-  if (!e.shiftKey && !direct.value.has(id) && viaTags.value.has(id)) {
-    toast.info(`Incluido por el tag «${viaTags.value.get(id)!.join('», «')}». Quítalo de los tags del reporte para excluirlo.`);
-    return;
-  }
+  if (!e.shiftKey && warnDynamic(id)) return;
   const r = checkboxSelect(ids.value, { selected: direct.value, anchor: anchor.value }, index, e.shiftKey);
   anchor.value = r.anchor;
   sourceIds.value = [...r.selected];
+}
+
+/** Clic en un medidor del árbol (sin rangos con Shift). */
+function toggleId(id: number) {
+  if (warnDynamic(id)) return;
+  sourceIds.value = direct.value.has(id) ? sourceIds.value.filter((x) => x !== id) : [...sourceIds.value, id];
 }
 
 function selectFiltered(select: boolean) {
@@ -110,6 +164,8 @@ function clearAll() {
   if (effective.value.size > 20 && !confirm(`¿Quitar los ${effective.value.size} medidores del reporte?`)) return;
   sourceIds.value = [];
   tagIds.value = [];
+  panelIds.value = [];
+  spaceIds.value = [];
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +183,9 @@ function addDynamic() {
 function removeDynamic(id: number) {
   tagIds.value = tagIds.value.filter((t) => t !== id);
 }
+
+const PANEL_CHIP = '#475569';
+const SPACE_CHIP = '#0d9488';
 
 // ---------------------------------------------------------------------------
 // Lista virtualizada
@@ -156,16 +215,34 @@ const MAX_ROW_TAGS = 3;
       </div>
 
       <div class="flex flex-wrap items-center gap-1.5 rounded-lg bg-slate-50 p-2">
-        <span class="text-xs font-medium text-slate-600" title="Todos los miembros actuales del tag entran al reporte; se resuelven al generar">Tags del reporte:</span>
-        <span v-if="!tagIds.length" class="text-xs text-slate-400">ninguno</span>
+        <span class="text-xs font-medium text-slate-600" title="Todos los medidores actuales del tag o nodo entran al reporte; se resuelven al generar">Tags y nodos del reporte:</span>
+        <span v-if="!tagIds.length && !panelIds.length && !spaceIds.length" class="text-xs text-slate-400">ninguno</span>
         <TagChip
           v-for="tid in tagIds"
-          :key="tid"
+          :key="`t${tid}`"
           :name="catalog.tagById.get(tid)?.name ?? 'Tag eliminado'"
           :color="catalog.tagById.get(tid)?.color ?? '#94a3b8'"
           :count="catalog.tagById.get(tid)?.sourceIds.length ?? 0"
           removable
           @remove="removeDynamic(tid)"
+        />
+        <TagChip
+          v-for="pid in panelIds"
+          :key="`p${pid}`"
+          :name="`Tablero ${hierarchy.panelById.get(pid)?.name ?? '(eliminado)'}`"
+          :color="hierarchy.panelById.has(pid) ? PANEL_CHIP : '#94a3b8'"
+          :count="hierarchy.panelSources([pid]).length"
+          removable
+          @remove="panelIds = panelIds.filter((x) => x !== pid)"
+        />
+        <TagChip
+          v-for="sid in spaceIds"
+          :key="`s${sid}`"
+          :name="`Espacio ${hierarchy.spaceById.get(sid)?.name ?? '(eliminado)'}`"
+          :color="hierarchy.spaceById.has(sid) ? SPACE_CHIP : '#94a3b8'"
+          :count="hierarchy.spaceSources([sid]).length"
+          removable
+          @remove="spaceIds = spaceIds.filter((x) => x !== sid)"
         />
         <div class="ml-auto flex items-center gap-2">
           <select v-if="unusedTags.length" v-model="addTag" class="input w-auto py-1 text-xs" @change="addDynamic">
@@ -173,10 +250,23 @@ const MAX_ROW_TAGS = 3;
             <option v-for="t in unusedTags" :key="t.id" :value="t.id">{{ t.name }} ({{ t.sourceIds.length }})</option>
           </select>
           <a :href="tagsHref" target="_blank" rel="noopener" class="btn btn-sm" title="Abre la configuración de tags en una pestaña nueva"><Icon name="tag" :size="12" /> Editar tags</a>
+          <a :href="hierarchyHref" target="_blank" rel="noopener" class="btn btn-sm" title="Abre el editor de jerarquías en una pestaña nueva"><Icon name="tree" :size="12" /> Editar jerarquías</a>
         </div>
       </div>
 
       <MeterFilterBar :state="filters.state" :active="filters.active.value" @clear="filters.clear()">
+        <div class="flex overflow-hidden rounded-lg border border-slate-300 text-xs" role="group" aria-label="Presentación">
+          <button class="flex items-center gap-1 px-2.5 py-1.5" :class="layout === 'list' ? 'bg-slate-800 text-white' : 'bg-white hover:bg-slate-50'" title="Lista de medidores" @click="layout = 'list'">
+            <Icon name="list" :size="13" /> Lista
+          </button>
+          <button class="flex items-center gap-1 border-l border-slate-300 px-2.5 py-1.5" :class="layout !== 'list' ? 'bg-slate-800 text-white' : 'bg-white hover:bg-slate-50'" title="Árbol de jerarquías" @click="layout = lastTree">
+            <Icon name="tree" :size="13" /> Árbol
+          </button>
+        </div>
+        <select v-if="layout !== 'list'" v-model="layout" class="input w-auto py-1.5 text-xs" title="Jerarquía">
+          <option value="supply">Suministro</option>
+          <option value="commercial">Comercial</option>
+        </select>
         <div class="flex overflow-hidden rounded-lg border border-slate-300 text-xs">
           <button class="px-2.5 py-1.5" :class="view === 'all' ? 'bg-slate-800 text-white' : 'bg-white hover:bg-slate-50'" @click="view = 'all'">Todos</button>
           <button class="border-l border-slate-300 px-2.5 py-1.5" :class="view === 'selected' ? 'bg-slate-800 text-white' : 'bg-white hover:bg-slate-50'" @click="view = 'selected'">
@@ -201,7 +291,20 @@ const MAX_ROW_TAGS = 3;
       </div>
     </header>
 
-    <div ref="listEl" class="h-[480px] overflow-auto">
+    <MeterTree
+      v-if="layout !== 'list'"
+      v-model:panel-ids="panelIds"
+      v-model:space-ids="spaceIds"
+      :kind="layout"
+      :visible-ids="ids"
+      :filtering="treeFiltering"
+      :effective="effective"
+      :direct="direct"
+      :issues="issues"
+      :timezone="timezone"
+      @toggle-meter="toggleId"
+    />
+    <div v-else ref="listEl" class="h-[480px] overflow-auto">
       <div v-if="!filtered.length" class="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-slate-500">
         <Icon name="layers" :size="28" class="text-slate-300" />
         {{ view === 'selected' && !effective.size ? 'Aún no hay medidores en el reporte: marca los de la lista, pega una lista o agrega un tag.' : 'Ningún medidor coincide con los filtros' }}
@@ -263,7 +366,10 @@ const MAX_ROW_TAGS = 3;
         </div>
       </div>
     </div>
-    <footer class="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">Consejo: Shift + clic marca o desmarca un rango completo.</footer>
+    <footer class="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
+      <template v-if="layout === 'list'">Consejo: Shift + clic marca o desmarca un rango completo.</template>
+      <template v-else>Consejo: marcar un {{ layout === 'supply' ? 'tablero agrega todo su aguas abajo' : 'espacio agrega sus subespacios' }} como nodo dinámico; los vínculos <Icon name="link" :size="11" class="inline" /> llevan al tablero real.</template>
+    </footer>
 
     <PasteListModal v-if="showPaste" @close="showPaste = false" @add="addIds" />
   </section>

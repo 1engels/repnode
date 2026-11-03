@@ -10,6 +10,7 @@ export const router = createRouter({
     { path: '/reports/new', name: 'report-new', component: () => import('./views/ReportEditorView.vue') },
     { path: '/reports/:id/edit', name: 'report-edit', component: () => import('./views/ReportEditorView.vue'), props: true },
     { path: '/tags', name: 'tags', component: () => import('./views/TagsView.vue') },
+    { path: '/hierarchy', name: 'hierarchy', component: () => import('./views/hierarchy-view.vue'), meta: { wide: true } },
     { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/reports' },
   ],

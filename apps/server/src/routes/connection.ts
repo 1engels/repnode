@@ -3,12 +3,12 @@ import { z } from 'zod';
 import { connectionParamsSchema, connectRequestSchema, type ProfileDTO } from '@repnode/shared';
 import { HttpError } from '../errors.ts';
 import { connect, disconnect, sessionDTO, testConnection } from '../mssql/session.ts';
-import { decryptSecret, encryptSecret, profileIdFor } from '../security/secrets.ts';
+import { decryptSecret, encryptSecret, idForNewProfile } from '../security/secrets.ts';
 import { profiles, type StoredProfile } from '../store/sqlite.ts';
 import { clearValidationCache } from '../validate.ts';
 
 const testSchema = z.union([
-  z.object({ params: connectionParamsSchema, password: z.string() }),
+  z.object({ params: connectionParamsSchema, password: z.string(), profileId: z.string().optional(), clientSecret: z.string().optional() }),
   z.object({ profileId: z.string(), clientSecret: z.string() }),
 ]);
 
@@ -33,12 +33,18 @@ export default async function connectionRoutes(app: FastifyInstance, opts: { mas
     }
   }
 
+  /** Contraseña escrita o, si se edita un perfil y se dejó vacía, la guardada. */
+  function resolvePassword(password: string, profileId?: string, clientSecret?: string): string {
+    if (password || !profileId || !clientSecret) return password;
+    return profiles.get(profileId)?.secret ? unlock(profileId, clientSecret).password : password;
+  }
+
   app.get('/api/session', async () => sessionDTO());
 
   app.post('/api/connection/test', async (req) => {
     const body = testSchema.parse(req.body);
     const version = 'params' in body
-      ? await testConnection(body.params, body.password)
+      ? await testConnection(body.params, resolvePassword(body.password, body.profileId, body.clientSecret))
       : await (async () => {
           const { profile, password } = unlock(body.profileId, body.clientSecret);
           return testConnection(profile.params, password);
@@ -52,11 +58,13 @@ export default async function connectionRoutes(app: FastifyInstance, opts: { mas
 
     if ('params' in body) {
       const params = { ...body.params, name: body.params.name || defaultName(body.params) };
-      const id = profileIdFor(params);
-      await connect(id, params, body.password);
-      if (body.remember) {
+      // Editar un perfil conserva su ID: los reportes, tags y jerarquías siguen asociados aunque cambie el servidor.
+      const id = body.profileId ?? idForNewProfile(params, profiles.list());
+      const password = resolvePassword(body.password, body.profileId, body.clientSecret);
+      await connect(id, params, password);
+      if (body.remember || body.profileId) {
         if (!body.clientSecret) throw new HttpError(400, 'Falta el secreto de cliente para recordar la conexión', 'missing_client_secret');
-        profiles.upsert(id, params.name, params, encryptSecret(masterKey, body.clientSecret, id, body.password));
+        profiles.upsert(id, params.name, params, encryptSecret(masterKey, body.clientSecret, id, password));
         profile = toDTO(profiles.get(id)!);
       } else {
         profile = { ...params, id, name: params.name, hasStoredPassword: false, lastUsedAt: null };

@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { decryptSecret, encryptSecret, profileIdFor } from './secrets.ts';
+import { decryptSecret, encryptSecret, idForNewProfile, profileIdFor } from './secrets.ts';
 
 const master = randomBytes(32);
 const clientSecret = randomBytes(32).toString('base64');
@@ -35,5 +35,24 @@ describe('secretos', () => {
     const a = profileIdFor({ server: 'SQL01', port: null, instance: 'ion', database: 'ion_data', username: 'Reader', domain: null });
     expect(a).toBe(id);
     expect(id).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  describe('ID para una conexión nueva', () => {
+    const params = { server: 'sql01', port: null, instance: 'ION', database: 'ION_Data', username: 'reader', domain: null };
+    const moved = { ...params, server: '10.0.0.5' };
+
+    it('usa el hash si nadie lo ocupa', () => {
+      expect(idForNewProfile(params, [])).toBe(id);
+    });
+
+    it('reutiliza el ID de un perfil editado que hoy tiene esos parámetros', () => {
+      expect(idForNewProfile(moved, [{ id, params: moved }])).toBe(id);
+    });
+
+    it('no pisa un perfil editado cuyo ID es el hash de sus parámetros anteriores', () => {
+      const nuevo = idForNewProfile(params, [{ id, params: moved }]);
+      expect(nuevo).not.toBe(id);
+      expect(nuevo).toMatch(/^[0-9a-f]{64}$/);
+    });
   });
 });

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { useVirtualizer } from '@tanstack/vue-virtual';
-import { checkboxSelect, clickSelect, type ListSelection, type TagDTO } from '@repnode/shared';
+import { checkboxSelect, clickSelect, panelSourceIds, supplyPanelOrder, type ListSelection, type TagDTO } from '@repnode/shared';
 import ColorPalette from '../components/ColorPalette.vue';
 import FloatingMenu from '../components/FloatingMenu.vue';
 import Icon from '../components/Icon.vue';
@@ -10,11 +10,13 @@ import MeterLabel from '../components/MeterLabel.vue';
 import TagChip from '../components/TagChip.vue';
 import TagChooser, { type TagChoice } from '../components/TagChooser.vue';
 import { useMeterFilters } from '../lib/useMeterFilters';
-import { formatNumber, nextTagColor } from '../lib/util';
+import { formatNumber, makeMatcher, nextTagColor, normalize } from '../lib/util';
 import { useCatalogStore } from '../stores/catalog';
+import { useHierarchyStore } from '../stores/hierarchy';
 import { useToastStore } from '../stores/toast';
 
 const catalog = useCatalogStore();
+const hierarchy = useHierarchyStore();
 const toast = useToastStore();
 const loading = ref(true);
 
@@ -91,6 +93,13 @@ watch(
   },
 );
 
+// Búsqueda en la lista de tags creados (se muestra solo cuando hay muchos)
+const tagQuery = ref('');
+const shownTags = computed(() => {
+  const match = makeMatcher(tagQuery.value);
+  return catalog.tags.filter((t) => match(normalize(t.name)));
+});
+
 function filterByTag(id: number) {
   filters.state.tag = filters.state.tag === id ? '' : id;
 }
@@ -98,8 +107,38 @@ function filterByTag(id: number) {
 // ---------------------------------------------------------------------------
 // Lista de medidores: filtros y selección múltiple
 // ---------------------------------------------------------------------------
-const filters = useMeterFilters();
+// Filtro por tablero de Suministro: '' = todos, 'none' = sin tablero, número = medidores de ese tablero (sin aguas abajo)
+const panelFilter = ref<'' | 'none' | number>('');
+const panelOptions = computed(() => supplyPanelOrder(hierarchy.panels));
+const panelMeters = computed(() => {
+  const f = panelFilter.value;
+  return typeof f === 'number' ? new Set(panelSourceIds(hierarchy.panels, [f], { downstream: false })) : null;
+});
+// Si otra ventana elimina el tablero usado como filtro, se quita el filtro
+watch(
+  () => hierarchy.panelById,
+  (byId) => {
+    if (typeof panelFilter.value === 'number' && !byId.has(panelFilter.value)) panelFilter.value = '';
+  },
+);
+
+const filters = useMeterFilters({}, () => {
+  const f = panelFilter.value;
+  if (f === '') return null;
+  if (f === 'none') {
+    const place = hierarchy.supplyPlace;
+    return (s) => !place.has(s.id);
+  }
+  const set = panelMeters.value;
+  return (s) => !!set?.has(s.id);
+});
 const filtered = filters.filtered;
+const filtersActive = computed(() => filters.active.value || panelFilter.value !== '');
+
+function clearFilters() {
+  filters.clear();
+  panelFilter.value = '';
+}
 const ids = computed(() => filtered.value.map((s) => s.id));
 
 const selected = shallowRef(new Set<number>());
@@ -290,11 +329,11 @@ function menuAction(fn: () => void) {
         <section class="card p-4">
           <h2 class="font-semibold">Nuevo tag</h2>
           <form class="mt-3 space-y-3" @submit.prevent="create(false)">
-            <div class="flex items-center gap-2">
-              <span class="size-4 shrink-0 rounded-full" :style="{ background: newColor }" />
-              <input v-model="newName" class="input" placeholder="Nombre del tag (p. ej. Tablero norte)" maxlength="60" />
+            <input v-model="newName" class="input" placeholder="Nombre del tag (p. ej. Tablero norte)" maxlength="60" />
+            <div>
+              <span class="label">Color</span>
+              <ColorPalette v-model="newColor" />
             </div>
-            <ColorPalette v-model="newColor" />
             <div v-if="newName.trim()" class="flex">
               <TagChip :name="newName.trim()" :color="newColor" />
             </div>
@@ -309,12 +348,17 @@ function menuAction(fn: () => void) {
 
         <section class="card">
           <header class="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <h2 class="font-semibold">Tags <span class="text-slate-400">({{ catalog.tags.length }})</span></h2>
+            <h2 class="font-semibold">Tags creados <span class="text-slate-400">({{ catalog.tags.length }})</span></h2>
             <span class="text-xs text-slate-400">Clic para filtrar</span>
           </header>
+          <div v-if="catalog.tags.length > 8" class="relative border-b border-slate-100 px-4 py-2">
+            <Icon name="search" class="absolute top-4 left-6.5 text-slate-400" :size="14" />
+            <input v-model="tagQuery" class="input py-1.5 pl-8" placeholder="Buscar tag…" />
+          </div>
           <ul class="max-h-[50vh] divide-y divide-slate-100 overflow-y-auto">
             <li v-if="!catalog.tags.length" class="p-4 text-center text-sm text-slate-500">Sin tags todavía</li>
-            <li v-for="t in catalog.tags" :key="t.id">
+            <li v-else-if="!shownTags.length" class="p-4 text-center text-sm text-slate-500">Ningún tag coincide</li>
+            <li v-for="t in shownTags" :key="t.id">
               <div v-if="editing === t.id" class="space-y-3 bg-slate-50 p-3">
                 <input v-model="editName" class="input py-1.5" maxlength="60" @keydown.enter.prevent="saveEdit" @keydown.esc="editing = null" />
                 <ColorPalette v-model="editColor" />
@@ -351,7 +395,15 @@ function menuAction(fn: () => void) {
             <h2 class="font-semibold">Medidores</h2>
             <span class="text-xs text-slate-500">{{ formatNumber(filtered.length) }} de {{ formatNumber(catalog.sources.length) }}</span>
           </div>
-          <MeterFilterBar :state="filters.state" :active="filters.active.value" @clear="filters.clear()" />
+          <MeterFilterBar :state="filters.state" :active="filtersActive" @clear="clearFilters">
+            <template #selects>
+              <select v-model="panelFilter" class="input w-auto py-1.5" :class="panelFilter !== '' && 'border-brand-500'" title="Medidores del tablero: entradas, salidas y totalizador">
+                <option value="">Todos los tableros</option>
+                <option value="none">Sin tablero</option>
+                <option v-for="p in panelOptions" :key="p.id" :value="p.id">{{ '  '.repeat(p.depth) }}{{ p.depth ? '└ ' : '' }}{{ p.name }}</option>
+              </select>
+            </template>
+          </MeterFilterBar>
           <div class="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-2 py-1.5">
             <input
               type="checkbox"
@@ -401,12 +453,8 @@ function menuAction(fn: () => void) {
                   @remove="removeMember(filtered[row.index].id, t)"
                 />
               </div>
-              <button
-                class="btn btn-ghost btn-sm shrink-0 text-slate-500 hover:text-brand-700"
-                title="Agregar tag"
-                @click.stop="openRowMenu(filtered[row.index].id, $event)"
-              >
-                <Icon name="plus" />
+              <button class="btn btn-sm shrink-0" @click.stop="openRowMenu(filtered[row.index].id, $event)">
+                <Icon name="tag" :size="12" /> Agregar tag
               </button>
             </div>
           </div>
