@@ -12,7 +12,7 @@ export type AuthModeDTO = 'none' | 'pme';
 
 export interface SessionDTO {
   mode: AuthModeDTO;
-  /** Usuario de PME (modo pme); null en modo local. */
+  /** Nombre del usuario de PME (modo pme, p. ej. "supervisor"); null en modo local. */
   user: string | null;
   /** Minutos sin actividad tras los que se cierra la sesión. */
   idleMinutes: number;
@@ -221,7 +221,7 @@ export interface HistoryEntryDTO {
   error: string | null;
   forced: boolean;
   offGridRows: number;
-  /** Usuario de PME que lo generó (modo pme). */
+  /** Nombre del usuario de PME que lo generó (modo pme). */
   user: string | null;
 }
 

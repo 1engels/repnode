@@ -1,6 +1,6 @@
 import sql from 'mssql';
 import type { FastifyRequest } from 'fastify';
-import type { ConnectionParams, SessionDTO } from '@repnode/shared';
+import { pmeDisplayName, type ConnectionParams, type SessionDTO } from '@repnode/shared';
 import { runtimeConfig } from '../config.ts';
 import { describeSqlError, HttpError } from '../errors.ts';
 import { settings } from '../store/sqlite.ts';
@@ -131,7 +131,7 @@ export function sessionDTO(req: FastifyRequest): SessionDTO {
   const s = u?.sql ?? null;
   return {
     mode: runtimeConfig.authMode,
-    user: u?.user ?? null,
+    user: u?.user ? pmeDisplayName(u.user) : null,
     idleMinutes: Math.round(runtimeConfig.sessionIdleMs / 60_000),
     connected: !!s,
     profileId: s?.profileId ?? null,

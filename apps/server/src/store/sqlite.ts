@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { availableParallelism } from 'node:os';
-import { reportDefinitionSchema } from '@repnode/shared';
+import { pmeDisplayName, reportDefinitionSchema } from '@repnode/shared';
 import type { ConnectionParams, HierarchyKind, HistoryEntryDTO, JobStatus, PanelIcon, PanelMode, ReportDefinition, Settings } from '@repnode/shared';
 import { paths } from '../config.ts';
 import type { EncryptedSecret } from '../security/secrets.ts';
@@ -675,7 +675,8 @@ export const history = {
       error: (r.error as string | null) ?? null,
       forced: !!r.forced,
       offGridRows: (r.off_grid_rows as number) ?? 0,
-      user: (r.user_name as string | null) ?? null,
+      // Se guarda el IdentityId completo de PME; en pantalla va solo el nombre
+      user: r.user_name ? pmeDisplayName(r.user_name as string) : null,
     }));
   },
   /** Ejecuciones que quedaron a medias si el proceso se cerró. */

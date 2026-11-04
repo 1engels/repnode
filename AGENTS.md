@@ -93,6 +93,7 @@ repnode/
 │  ├─ timestamp-layout.ts     formato por estampa de tiempo: orden de columnas y reparto en archivos (+ pruebas)
 │  ├─ hierarchy.ts            jerarquías: grafo de suministro, árbol de espacios, ciclos, planes al soltar, diagnóstico,
 │  │                          árbol aplanado para listas, orden indentado de tableros (+ pruebas)
+│  ├─ pme-user.ts             pmeDisplayName(): nombre visible de un IdentityId de PME (+ pruebas)
 │  └─ time.test.ts
 ├─ apps/server/
 │  ├─ src/
@@ -492,11 +493,17 @@ queda aislado. La regla `^repnode(/.*)?$` no captura `/repnode-auth`. Hallazgos 
     `web.config` raíz del sitio (no se copian claves). **El `machineKey` de PME es `AutoGenerate`** (claves generadas
     por Windows por identidad del pool; los pools de PME corren como NetworkService y por eso comparten la cookie): el
     pool de `/repnode-auth` debe tener **la misma identidad que el de `/Web`**. Con ApplicationPoolIdentity la cookie
-    no se descifraba (401). El instalador copia la identidad del pool de `/Web` (o usa ese pool si no se puede replicar)
+    no se descifraba (401); con NetworkService, verificado en SRVSLVPMEAPP (PME 13.2): `decrypt ok`, ticket versión 2,
+    `AutoGenerate` sin `IsolateApps`. (`pme.compatibilityMode` sale como Framework20SP1 porque se lee del archivo, no
+    del valor efectivo en ejecución; no impide descifrar). El instalador copia la identidad del pool de `/Web` (o usa ese pool si no se puede replicar)
     y avisa si hay `IsolateApps`. `whoami.ashx?diag=1` (solo local) informa si llegó la cookie, el resultado de
     `FormsAuthentication.Decrypt`, la identidad del pool y la configuración de `machineKey`/forms de ambos lados. Responde
     `{"user":"..."}`, 401 sin sesión y 403 a peticiones que no son de este equipo (`Request.IsLocal`); no renueva la
     cookie (`slidingExpiration="false"`). Va por http en loopback, así no hay problema con el certificado autofirmado.
+  - El usuario es el **IdentityId de PME**, p. ej. `internal:database:<GUID>:supervisor` (tipo de cuenta, GUID,
+    nombre). Se guarda y compara completo (`UserSession.user`, `ownerKey`, `job_history.user_name`); la GUI y el
+    historial muestran `pmeDisplayName()` (último tramo, "supervisor"). `SystemDataService/Security/ValidateCredentials`
+    devuelve el mismo `IdentityId`, pero es la respuesta del inicio de sesión (POST con credenciales): no se usa.
     Limitación: valida el ticket de Forms (vigente hasta su vencimiento); un cierre de sesión en PME borra la cookie
     del navegador y RepNode deja de recibirla.
 - **SQL**: todos usan la cuenta de servicio (`REPNODE_SERVER`… de `production.ts`), cada sesión con su pool. La GUI se

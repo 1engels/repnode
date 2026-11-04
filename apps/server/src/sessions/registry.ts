@@ -8,7 +8,7 @@ import { closeSqlSession, type Session } from '../mssql/session.ts';
  */
 export interface UserSession {
   id: string;
-  /** Usuario de PME (modo pme); null en modo local. */
+  /** IdentityId de PME (modo pme, p. ej. "internal:database:<guid>:supervisor"); null en modo local. */
   user: string | null;
   createdAt: number;
   lastSeen: number;
