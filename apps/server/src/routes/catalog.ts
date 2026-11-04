@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   presetInputSchema, settingsSchema, TAG_PALETTE, tagColorSchema, tagCreateSchema, tagInputSchema, tagMembersSchema,
@@ -18,10 +18,10 @@ export default async function catalogRoutes(app: FastifyInstance) {
   // -------------------------------------------------------------------------
   // Catálogo
   // -------------------------------------------------------------------------
-  app.get('/api/catalog', async () => catalogToDTO(requireSession().catalog));
+  app.get('/api/catalog', async (req) => catalogToDTO(requireSession(req).catalog));
 
-  app.post('/api/catalog/refresh', async () => {
-    const c = await refreshCatalog();
+  app.post('/api/catalog/refresh', async (req) => {
+    const c = await refreshCatalog(requireSession(req));
     clearValidationCache();
     return catalogToDTO(c);
   });
@@ -29,8 +29,8 @@ export default async function catalogRoutes(app: FastifyInstance) {
   // -------------------------------------------------------------------------
   // Tags
   // -------------------------------------------------------------------------
-  function listTags(): TagDTO[] {
-    const s = requireSession();
+  function listTags(req: FastifyRequest): TagDTO[] {
+    const s = requireSession(req);
     return tags.list(s.profileId).map((t) => {
       const sourceIds: number[] = [];
       let missing = 0;
@@ -43,7 +43,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
     });
   }
 
-  app.get('/api/tags', async () => listTags());
+  app.get('/api/tags', async (req) => listTags(req));
 
   /** Un color fuera de la paleta base pasa a la paleta personalizada del perfil. */
   function rememberColor(profileId: string, color: string): void {
@@ -51,7 +51,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
   }
 
   app.post('/api/tags', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const body = tagCreateSchema.parse(req.body);
     let id: number;
     try {
@@ -62,11 +62,11 @@ export default async function catalogRoutes(app: FastifyInstance) {
     const names = body.sourceIds.map((sid) => s.catalog.sourceById.get(sid)?.name).filter((n): n is string => !!n);
     if (names.length) tags.addMembers(id, names);
     rememberColor(s.profileId, body.color);
-    return listTags();
+    return listTags(req);
   });
 
   app.put('/api/tags/:id', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { id } = idParam.parse(req.params);
     const body = tagInputSchema.parse(req.body);
     try {
@@ -76,39 +76,39 @@ export default async function catalogRoutes(app: FastifyInstance) {
       throw new HttpError(409, `Ya existe un tag llamado "${body.name}"`, 'duplicate');
     }
     rememberColor(s.profileId, body.color);
-    return listTags();
+    return listTags(req);
   });
 
   app.delete('/api/tags/:id', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { id } = idParam.parse(req.params);
     tags.remove(s.profileId, id);
-    return listTags();
+    return listTags(req);
   });
 
   app.post('/api/tags/:id/members', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { id } = idParam.parse(req.params);
     if (!tags.owns(s.profileId, id)) throw new HttpError(404, 'Tag no encontrado', 'not_found');
     const body = tagMembersSchema.parse(req.body);
     const names = body.sourceIds.map((sid) => s.catalog.sourceById.get(sid)?.name).filter((n): n is string => !!n);
     if (body.action === 'add') tags.addMembers(id, names);
     else tags.removeMembers(id, names);
-    return listTags();
+    return listTags(req);
   });
 
   // Paleta personalizada de colores (por perfil)
-  app.get('/api/tag-colors', async () => tagColors.list(requireSession().profileId));
+  app.get('/api/tag-colors', async (req) => tagColors.list(requireSession(req).profileId));
 
   app.post('/api/tag-colors', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { color } = tagColorSchema.parse(req.body);
     rememberColor(s.profileId, color);
     return tagColors.list(s.profileId);
   });
 
   app.delete('/api/tag-colors/:color', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { color } = colorParam.parse(req.params);
     tagColors.remove(s.profileId, color);
     return tagColors.list(s.profileId);
@@ -117,8 +117,8 @@ export default async function catalogRoutes(app: FastifyInstance) {
   // -------------------------------------------------------------------------
   // Presets de mediciones
   // -------------------------------------------------------------------------
-  function listPresets(): PresetDTO[] {
-    const s = requireSession();
+  function listPresets(req: FastifyRequest): PresetDTO[] {
+    const s = requireSession(req);
     return presets.list(s.profileId).map((p) => ({
       id: p.id,
       name: p.name,
@@ -126,21 +126,21 @@ export default async function catalogRoutes(app: FastifyInstance) {
     }));
   }
 
-  app.get('/api/presets', async () => listPresets());
+  app.get('/api/presets', async (req) => listPresets(req));
 
   app.post('/api/presets', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const body = presetInputSchema.parse(req.body);
     const names = body.quantityIds.map((q) => s.catalog.quantityById.get(q)?.name).filter((n): n is string => !!n);
     presets.upsert(s.profileId, body.name, names);
-    return listPresets();
+    return listPresets(req);
   });
 
   app.delete('/api/presets/:id', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { id } = idParam.parse(req.params);
     presets.remove(s.profileId, id);
-    return listPresets();
+    return listPresets(req);
   });
 
   // -------------------------------------------------------------------------

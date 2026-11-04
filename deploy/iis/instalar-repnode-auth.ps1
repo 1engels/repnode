@@ -1,0 +1,80 @@
+#Requires -RunAsAdministrator
+# Instala la aplicacion IIS /repnode-auth: un endpoint minimo que devuelve el usuario de la sesion de PME a RepNode.
+# No modifica las aplicaciones de PME: crea un application pool y una aplicacion nuevos en "Default Web Site".
+#
+# Uso (PowerShell como administrador, en el servidor de PME, desde la carpeta deploy\iis del repositorio):
+#   powershell -ExecutionPolicy Bypass -File .\instalar-repnode-auth.ps1
+# Opcional: -Destino C:\RepNode\repnode-auth  -Sitio "Default Web Site"
+
+param(
+  [string]$Destino = 'C:\RepNode\repnode-auth',
+  [string]$Sitio = 'Default Web Site',
+  [string]$Pool = 'RepNodeAuth',
+  [string]$AplicacionPme = '/Web'
+)
+
+$ErrorActionPreference = 'Stop'
+Import-Module WebAdministration
+
+function Paso([string]$t) { Write-Host ''; Write-Host "== $t" -ForegroundColor Cyan }
+
+# Huella del machineKey (nunca se muestran las claves)
+function MachineKeyHash([string]$webConfig) {
+  if (-not (Test-Path -LiteralPath $webConfig)) { return $null }
+  $xml = New-Object System.Xml.XmlDocument
+  $xml.Load($webConfig)
+  $mk = $xml.SelectSingleNode('/configuration/system.web/machineKey')
+  if ($null -eq $mk) { return $null }
+  $raw = ($mk.validationKey, $mk.decryptionKey, $mk.validation, $mk.decryption) -join '|'
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($raw))).Replace('-', '').Substring(0, 16)
+}
+
+Paso 'Comprobando que /repnode-auth podra leer la cookie de PME'
+$site = Get-Website -Name $Sitio
+if (-not $site) { throw "No existe el sitio '$Sitio'" }
+$rootConfig = Join-Path ([Environment]::ExpandEnvironmentVariables($site.PhysicalPath)) 'web.config'
+$pmeApp = Get-WebApplication -Site $Sitio -Name $AplicacionPme.TrimStart('/')
+if (-not $pmeApp) { throw "No existe la aplicacion $AplicacionPme en '$Sitio'" }
+$pmeConfig = Join-Path ([Environment]::ExpandEnvironmentVariables($pmeApp.PhysicalPath)) 'web.config'
+$rootHash = MachineKeyHash $rootConfig
+$pmeHash = MachineKeyHash $pmeConfig
+if (-not $rootHash) { throw "El web.config raiz ($rootConfig) no tiene machineKey: /repnode-auth no podria validar la cookie de PME" }
+if ($pmeHash -and $pmeHash -ne $rootHash) {
+  throw "El machineKey de $AplicacionPme no coincide con el del web.config raiz (huellas $pmeHash / $rootHash). Avisa antes de continuar."
+}
+Write-Host "machineKey del sitio y de $AplicacionPme coinciden (huella $rootHash)"
+
+Paso "Copiando archivos a $Destino"
+New-Item -ItemType Directory -Force -Path $Destino | Out-Null
+Copy-Item -Path (Join-Path $PSScriptRoot 'repnode-auth\*') -Destination $Destino -Force
+# El application pool y el usuario anonimo de IIS solo necesitan leer
+icacls $Destino /grant 'IIS_IUSRS:(OI)(CI)RX' 'IUSR:(OI)(CI)RX' | Out-Null
+
+Paso "Application pool $Pool"
+if (-not (Test-Path "IIS:\AppPools\$Pool")) {
+  New-WebAppPool -Name $Pool | Out-Null
+}
+Set-ItemProperty "IIS:\AppPools\$Pool" -Name managedRuntimeVersion -Value 'v4.0'
+Set-ItemProperty "IIS:\AppPools\$Pool" -Name managedPipelineMode -Value 'Integrated'
+Set-ItemProperty "IIS:\AppPools\$Pool" -Name processModel.identityType -Value 'ApplicationPoolIdentity'
+Write-Host 'Listo (.NET v4.0, integrado, ApplicationPoolIdentity)'
+
+Paso 'Aplicacion /repnode-auth'
+if (Get-WebApplication -Site $Sitio -Name 'repnode-auth') {
+  Set-ItemProperty "IIS:\Sites\$Sitio\repnode-auth" -Name physicalPath -Value $Destino
+  Set-ItemProperty "IIS:\Sites\$Sitio\repnode-auth" -Name applicationPool -Value $Pool
+  Write-Host 'Ya existia: actualizada'
+} else {
+  New-WebApplication -Site $Sitio -Name 'repnode-auth' -PhysicalPath $Destino -ApplicationPool $Pool | Out-Null
+  Write-Host 'Creada'
+}
+
+Paso 'Prueba sin sesion de PME (debe responder 401)'
+Start-Sleep -Seconds 2
+$code = & curl.exe -s -o NUL -w '%{http_code}' 'http://127.0.0.1/repnode-auth/whoami.ashx'
+Write-Host "Respuesta: $code"
+if ($code -ne '401') { Write-Warning 'Se esperaba 401. Revisa el visor de eventos o abre la URL en el navegador del servidor para ver el error.' }
+
+Write-Host ''
+Write-Host 'Siguiente paso: probar con tu cookie de PME (ver README, "Despliegue en PME").' -ForegroundColor Green

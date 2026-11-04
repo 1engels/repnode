@@ -148,7 +148,10 @@ const statusLabel: Record<string, string> = { done: 'Completado', error: 'Error'
           <tbody>
             <tr v-for="h in history.slice(0, 15)" :key="h.id" class="border-t border-slate-100">
               <td class="px-3 py-2 whitespace-nowrap">{{ formatIsoDate(h.startedAt) }}</td>
-              <td class="px-3 py-2">{{ h.reportName }}</td>
+              <td class="px-3 py-2">
+                {{ h.reportName }}
+                <span v-if="h.user" class="block text-xs text-slate-500">por {{ h.user }}</span>
+              </td>
               <td class="max-w-56 truncate px-3 py-2 font-mono text-xs">{{ h.fileName }}</td>
               <td class="px-3 py-2 text-right">{{ formatNumber(h.meters) }}</td>
               <td class="px-3 py-2 text-right">{{ formatNumber(h.rows) }}</td>

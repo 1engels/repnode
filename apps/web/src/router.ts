@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { useSessionStore } from './stores/session';
 
 export const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', redirect: '/reports' },
     { path: '/connect', name: 'connect', component: () => import('./views/ConnectView.vue'), meta: { public: true } },
@@ -19,5 +19,7 @@ export const router = createRouter({
 router.beforeEach(async (to) => {
   const session = useSessionStore();
   if (!session.checked) await session.check().catch(() => {});
+  // Embebido en PME no hay credenciales que elegir: se conecta solo con la cuenta del servidor
+  if (session.isPme && !session.connected && !session.authLost) await session.autoConnect();
   if (!to.meta.public && !session.connected) return { name: 'connect', query: to.fullPath !== '/reports' ? { next: to.fullPath } : undefined };
 });

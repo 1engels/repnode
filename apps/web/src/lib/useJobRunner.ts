@@ -1,6 +1,6 @@
 import { onBeforeUnmount, ref, shallowRef } from 'vue';
 import type { DateRange, JobState, ReportDefinition, ValidationResult } from '@repnode/shared';
-import { ApiError, post } from './api';
+import { ApiError, apiUrl, post } from './api';
 import { triggerDownload } from './util';
 import { useToastStore } from '../stores/toast';
 
@@ -23,7 +23,7 @@ export function useJobRunner() {
 
   function listen(id: string): void {
     es?.close();
-    es = new EventSource(`/api/jobs/${id}/events`);
+    es = new EventSource(apiUrl(`/api/jobs/${id}/events`));
     es.onmessage = (ev) => {
       const s = JSON.parse(ev.data) as JobState;
       job.value = s;
@@ -52,7 +52,7 @@ export function useJobRunner() {
   }
 
   function download(): void {
-    if (job.value?.status === 'done') triggerDownload(`/api/jobs/${job.value.id}/download`);
+    if (job.value?.status === 'done') triggerDownload(apiUrl(`/api/jobs/${job.value.id}/download`));
   }
 
   async function cancel(): Promise<void> {

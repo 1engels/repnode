@@ -7,7 +7,15 @@ export interface ProfileDTO extends ConnectionParams {
   lastUsedAt: string | null;
 }
 
+/** none = app local (un usuario en este equipo); pme = embebida en PME, con el usuario de PME. */
+export type AuthModeDTO = 'none' | 'pme';
+
 export interface SessionDTO {
+  mode: AuthModeDTO;
+  /** Usuario de PME (modo pme); null en modo local. */
+  user: string | null;
+  /** Minutos sin actividad tras los que se cierra la sesión. */
+  idleMinutes: number;
   connected: boolean;
   profileId: string | null;
   server: string | null;
@@ -195,6 +203,8 @@ export interface JobState {
   forced: boolean;
   /** Con filas completadas: timestamps con datos que no caen en la grilla (se escriben como filas extra) */
   offGridRows: number;
+  /** En cola: cuántos jobs hay antes (1 = el siguiente); null si no está en cola. */
+  queuePosition: number | null;
 }
 
 export interface HistoryEntryDTO {
@@ -211,6 +221,8 @@ export interface HistoryEntryDTO {
   error: string | null;
   forced: boolean;
   offGridRows: number;
+  /** Usuario de PME que lo generó (modo pme). */
+  user: string | null;
 }
 
 export type { Settings };

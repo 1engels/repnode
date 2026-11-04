@@ -16,7 +16,11 @@ const pct = computed(() => {
 });
 const statusText = computed(() => {
   switch (props.job.status) {
-    case 'queued': return 'En cola…';
+    case 'queued':
+      // Con varios usuarios, los reportes esperan su turno
+      return props.job.queuePosition && props.job.queuePosition > 1
+        ? `En cola: hay ${props.job.queuePosition - 1} reporte(s) antes que este…`
+        : 'En cola: es el siguiente…';
     case 'running': return 'Extrayendo datos de SQL Server…';
     case 'assembling': return 'Armando el archivo final…';
     case 'done': return 'Listo. La descarga comenzó automáticamente.';

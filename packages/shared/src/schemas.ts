@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { isLocalDateTime, isValidTimeZone } from './time.ts';
 
+/**
+ * Ruta bajo la que se publica RepNode (GUI y API), también en desarrollo. Así funciona igual detrás del proxy de IIS
+ * de PME (https://servidor/repnode/), con el mismo origen que PME, que en localhost.
+ */
+export const BASE_PATH = '/repnode';
+
 // ---------------------------------------------------------------------------
 // Conexión
 // ---------------------------------------------------------------------------

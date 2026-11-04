@@ -1,27 +1,42 @@
 import sql from 'mssql';
+import type { FastifyRequest } from 'fastify';
 import type { ConnectionParams, SessionDTO } from '@repnode/shared';
+import { runtimeConfig } from '../config.ts';
 import { describeSqlError, HttpError } from '../errors.ts';
 import { settings } from '../store/sqlite.ts';
 import { buildMssqlConfig } from './config.ts';
 import { loadCatalog, type Catalog } from './catalog.ts';
 
+/**
+ * Conexión SQL de una sesión de usuario: cada usuario tiene su propio pool (ver sessions/registry.ts). El catálogo es
+ * de solo lectura y se comparte entre las sesiones que apuntan a la misma base con el mismo login.
+ */
 export interface Session {
   profileId: string;
   params: ConnectionParams;
   password: string;
   pool: sql.ConnectionPool;
-  catalog: Catalog;
+  readonly catalog: Catalog;
   serverVersion: string;
+  /** Clave del catálogo compartido. */
+  catalogKey: string;
 }
 
-let current: Session | null = null;
+const catalogs = new Map<string, { catalog: Catalog; refs: number }>();
+
+function catalogKeyFor(profileId: string, p: ConnectionParams): string {
+  return [profileId, p.server, p.port ?? '', p.instance ?? '', p.database, p.domain ?? '', p.username].join('|').toLowerCase();
+}
 
 const REQUIRED_OBJECTS = ['Source', 'Quantity', 'SourceQuantity', 'DataLog2', 'vwDataLog2'];
 
 async function openPool(params: ConnectionParams, password: string): Promise<{ pool: sql.ConnectionPool; version: string }> {
   const s = settings.get();
   const pool = new sql.ConnectionPool(
-    buildMssqlConfig(params, password, { poolMax: Math.max(8, s.concurrency * 2), requestTimeoutMs: s.requestTimeoutSeconds * 1000 }),
+    buildMssqlConfig(params, password, {
+      poolMax: runtimeConfig.sessionPoolMax ?? Math.max(8, s.concurrency * 2),
+      requestTimeoutMs: s.requestTimeoutSeconds * 1000,
+    }),
   );
   try {
     await pool.connect();
@@ -59,44 +74,65 @@ export async function testConnection(params: ConnectionParams, password: string)
   return version;
 }
 
-export async function connect(profileId: string, params: ConnectionParams, password: string): Promise<Session> {
+/** Abre el pool de una sesión. Si otra sesión ya tiene el catálogo de esa base, lo reutiliza. */
+export async function openSqlSession(profileId: string, params: ConnectionParams, password: string): Promise<Session> {
   const { pool, version } = await openPool(params, password);
-  let catalog: Catalog;
-  try {
-    catalog = await loadCatalog(pool);
-  } catch (err) {
-    await pool.close().catch(() => {});
-    throw new HttpError(500, `Error leyendo el catálogo: ${describeSqlError(err)}`, 'catalog_failed');
+  const key = catalogKeyFor(profileId, params);
+  let entry = catalogs.get(key);
+  if (!entry) {
+    try {
+      entry = { catalog: await loadCatalog(pool), refs: 0 };
+    } catch (err) {
+      await pool.close().catch(() => {});
+      throw new HttpError(500, `Error leyendo el catálogo: ${describeSqlError(err)}`, 'catalog_failed');
+    }
+    // Otra sesión pudo cargarlo mientras tanto: se usa una sola copia
+    entry = catalogs.get(key) ?? entry;
+    catalogs.set(key, entry);
   }
-  await disconnect();
-  current = { profileId, params, password, pool, catalog, serverVersion: version };
-  return current;
-}
-
-export async function disconnect(): Promise<void> {
-  const s = current;
-  current = null;
-  if (s) await s.pool.close().catch(() => {});
-}
-
-export async function refreshCatalog(): Promise<Catalog> {
-  const s = requireSession();
-  s.catalog = await loadCatalog(s.pool);
-  return s.catalog;
-}
-
-export function getSession(): Session | null {
-  return current;
-}
-
-export function requireSession(): Session {
-  if (!current) throw new HttpError(409, 'No hay conexión activa con SQL Server', 'not_connected');
-  return current;
-}
-
-export function sessionDTO(): SessionDTO {
-  const s = current;
+  entry.refs++;
   return {
+    profileId,
+    params,
+    password,
+    pool,
+    serverVersion: version,
+    catalogKey: key,
+    get catalog() {
+      return catalogs.get(key)!.catalog;
+    },
+  };
+}
+
+export async function closeSqlSession(s: Session): Promise<void> {
+  const entry = catalogs.get(s.catalogKey);
+  if (entry && --entry.refs <= 0) catalogs.delete(s.catalogKey);
+  await s.pool.close().catch(() => {});
+}
+
+/** Recarga el catálogo; lo ven todas las sesiones que lo comparten. */
+export async function refreshCatalog(s: Session): Promise<Catalog> {
+  const catalog = await loadCatalog(s.pool);
+  const entry = catalogs.get(s.catalogKey);
+  if (entry) entry.catalog = catalog;
+  else catalogs.set(s.catalogKey, { catalog, refs: 1 });
+  return catalog;
+}
+
+/** Conexión SQL de la sesión del usuario que hace la petición. */
+export function requireSession(req: FastifyRequest): Session {
+  const s = req.userSession?.sql;
+  if (!s) throw new HttpError(409, 'No hay conexión activa con SQL Server', 'not_connected');
+  return s;
+}
+
+export function sessionDTO(req: FastifyRequest): SessionDTO {
+  const u = req.userSession;
+  const s = u?.sql ?? null;
+  return {
+    mode: runtimeConfig.authMode,
+    user: u?.user ?? null,
+    idleMinutes: Math.round(runtimeConfig.sessionIdleMs / 60_000),
     connected: !!s,
     profileId: s?.profileId ?? null,
     server: s ? s.params.server + (s.params.instance ? `\\${s.params.instance}` : s.params.port ? `,${s.params.port}` : '') : null,

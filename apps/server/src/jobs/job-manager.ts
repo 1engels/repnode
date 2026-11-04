@@ -5,7 +5,8 @@ import { Worker } from 'node:worker_threads';
 import { nanoid } from 'nanoid';
 import type { FastifyBaseLogger } from 'fastify';
 import { renderFileName, splitColumns, utcToLocalInput, type JobState, type ReportDefinition, type ValidationResult } from '@repnode/shared';
-import { paths } from '../config.ts';
+import { paths, runtimeConfig } from '../config.ts';
+import { HttpError } from '../errors.ts';
 import { buildMssqlConfig } from '../mssql/config.ts';
 import type { Session } from '../mssql/session.ts';
 import type { ResolvedSelection } from '../selection.ts';
@@ -17,6 +18,8 @@ import type { MeterTask, WorkerInput, WorkerMessage } from './protocol.ts';
 interface Job {
   state: JobState;
   profileId: string;
+  /** Dueño (ver ownerKey en sessions/registry.ts): solo él puede verlo, cancelarlo y descargarlo. */
+  owner: string;
   emitter: EventEmitter;
   dir: string;
   outFile: string;
@@ -30,7 +33,8 @@ const WORKER_HEAP_MB = 256;
 
 const jobs = new Map<string, Job>();
 const queue: Job[] = [];
-let running: Job | null = null;
+/** Jobs en ejecución; a lo sumo REPNODE_MAX_CONCURRENT_JOBS a la vez (cada uno con sus workers y conexiones). */
+const running = new Set<Job>();
 let log: FastifyBaseLogger | null = null;
 
 export function initJobs(logger: FastifyBaseLogger): void {
@@ -69,24 +73,52 @@ function finish(job: Job, status: JobState['status'], error: string | null = nul
   job.cleanupTimer.unref();
 }
 
+/** Actualiza la posición en la cola que ven los usuarios que esperan. */
+function publishQueue(): void {
+  queue.forEach((job, i) => {
+    if (job.state.queuePosition !== i + 1) {
+      job.state.queuePosition = i + 1;
+      publish(job, true);
+    }
+  });
+}
+
 function next(): void {
-  if (running) return;
-  const job = queue.shift();
-  if (!job) return;
-  running = job;
-  job.run()
-    .catch((err) => {
-      log?.error({ err, job: job.state.id }, 'job falló');
-      if (!['done', 'error', 'cancelled'].includes(job.state.status)) finish(job, 'error', err instanceof Error ? err.message : String(err));
-    })
-    .finally(() => {
-      running = null;
-      next();
-    });
+  while (running.size < runtimeConfig.maxConcurrentJobs) {
+    const job = queue.shift();
+    if (!job) break;
+    running.add(job);
+    job.state.queuePosition = null;
+    job.run()
+      .catch((err) => {
+        log?.error({ err, job: job.state.id }, 'job falló');
+        if (!['done', 'error', 'cancelled'].includes(job.state.status)) finish(job, 'error', err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        running.delete(job);
+        next();
+      });
+  }
+  publishQueue();
+}
+
+const ACTIVE = new Set(['queued', 'running', 'assembling']);
+
+/** Jobs en cola o en curso de un dueño. */
+function activeJobs(owner: string): number {
+  let n = 0;
+  for (const job of jobs.values()) if (job.owner === owner && ACTIVE.has(job.state.status)) n++;
+  return n;
+}
+
+/** El dueño tiene jobs en cola o en curso: su sesión no vence por inactividad. */
+export function hasActiveJobs(owner: string): boolean {
+  return activeJobs(owner) > 0;
 }
 
 export interface CreateJobInput {
   session: Session;
+  owner: { key: string; user: string | null };
   definition: ReportDefinition;
   reportId: number | null;
   selection: ResolvedSelection;
@@ -95,7 +127,10 @@ export interface CreateJobInput {
   forced: boolean;
 }
 
-export function createJob({ session, definition, reportId, selection, validation, forced }: CreateJobInput): JobState {
+export function createJob({ session, owner, definition, reportId, selection, validation, forced }: CreateJobInput): JobState {
+  if (activeJobs(owner.key) >= runtimeConfig.maxJobsPerUser) {
+    throw new HttpError(429, `Ya tienes ${runtimeConfig.maxJobsPerUser} reportes en cola o en ejecución. Espera a que terminen o cancela alguno.`, 'too_many_jobs');
+  }
   const { catalog } = session;
   const id = nanoid(16);
   const dir = join(paths.jobs, id);
@@ -138,11 +173,13 @@ export function createJob({ session, definition, reportId, selection, validation
     error: null,
     forced,
     offGridRows: 0,
+    queuePosition: null,
   };
 
   const job: Job = {
     state,
     profileId: session.profileId,
+    owner: owner.key,
     emitter: new EventEmitter(),
     dir,
     outFile: join(dir, `output.${ext}`),
@@ -233,24 +270,28 @@ export function createJob({ session, definition, reportId, selection, validation
   };
 
   jobs.set(id, job);
-  history.insert({ id, profileId: session.profileId, reportId, reportName: definition.name, fileName, meters: meters.length, validation: validation.summary, forced });
+  history.insert({ id, profileId: session.profileId, user: owner.user, reportId, reportName: definition.name, fileName, meters: meters.length, validation: validation.summary, forced });
   queue.push(job);
   next();
   return { ...state };
 }
 
-export function getJob(id: string): Job | undefined {
-  return jobs.get(id);
+/** Job de ese dueño; los de otros usuarios no existen para él. */
+export function getJob(id: string, owner: string): Job | undefined {
+  const job = jobs.get(id);
+  return job && job.owner === owner ? job : undefined;
 }
 
-export function cancelJob(id: string): boolean {
-  const job = jobs.get(id);
+export function cancelJob(id: string, owner: string): boolean {
+  const job = getJob(id, owner);
   if (!job || ['done', 'error', 'cancelled'].includes(job.state.status)) return false;
   job.cancelRequested = true;
   const qi = queue.indexOf(job);
   if (qi >= 0) {
     queue.splice(qi, 1);
+    job.state.queuePosition = null;
     finish(job, 'cancelled');
+    publishQueue();
     return true;
   }
   for (const w of job.workers) w.postMessage({ type: 'cancel' });
@@ -259,8 +300,8 @@ export function cancelJob(id: string): boolean {
   return true;
 }
 
-export function subscribe(id: string, fn: (s: JobState) => void): (() => void) | null {
-  const job = jobs.get(id);
+export function subscribe(id: string, owner: string, fn: (s: JobState) => void): (() => void) | null {
+  const job = getJob(id, owner);
   if (!job) return null;
   job.emitter.on('update', fn);
   fn({ ...job.state });

@@ -2,7 +2,7 @@ import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import App from './App.vue';
 import { router } from './router';
-import { onNotConnected } from './lib/api';
+import { onNotAuthenticated, onNotConnected, setReconnectHandler } from './lib/api';
 import { useSessionStore } from './stores/session';
 import { useCatalogStore } from './stores/catalog';
 import { useReportsStore } from './stores/reports';
@@ -13,7 +13,13 @@ const app = createApp(App);
 app.use(createPinia());
 app.use(router);
 
-// Si el backend se reinició o perdió la conexión, se vuelve a la pantalla de conexión
+// La sesión del servidor vence tras unos minutos sin uso: se reconecta sola y la petición se repite
+setReconnectHandler(() => useSessionStore().reconnect());
+
+// Modo pme: si la sesión de PME terminó, se pide volver a iniciarla (App.vue muestra el aviso)
+onNotAuthenticated((loginUrl) => useSessionStore().markAuthLost(loginUrl));
+
+// Si no se pudo reconectar, se vuelve a la pantalla de conexión
 onNotConnected(() => {
   const session = useSessionStore();
   if (!session.connected) return;

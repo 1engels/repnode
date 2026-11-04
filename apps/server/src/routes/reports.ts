@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   gridSlotCount, jobRequestSchema, makeGrid, MAX_GRID_ROWS, rangeSchema, reportDefinitionSchema, selectionSchema, type ReportDTO,
@@ -7,6 +7,7 @@ import {
 import { HttpError } from '../errors.ts';
 import { cancelJob, createJob, getJob, subscribe } from '../jobs/job-manager.ts';
 import { requireSession } from '../mssql/session.ts';
+import { ownerKey } from '../sessions/registry.ts';
 import { resolveSelection } from '../selection.ts';
 import { history, reports } from '../store/sqlite.ts';
 import { validateCached } from '../validate.ts';
@@ -21,6 +22,9 @@ const validateSchema = z.union([
 
 const toDTO = (r: NonNullable<ReturnType<typeof reports.get>>): ReportDTO => r;
 
+/** Dueño de los jobs de quien hace la petición (las rutas /api siempre tienen sesión). */
+const owner = (req: FastifyRequest) => ownerKey(req.userSession!);
+
 function contentDisposition(fileName: string): string {
   const ascii = fileName.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\x20-\x7e]/g, '_').replace(/"/g, "'");
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
@@ -30,24 +34,24 @@ export default async function reportRoutes(app: FastifyInstance) {
   // -------------------------------------------------------------------------
   // Reportes guardados
   // -------------------------------------------------------------------------
-  app.get('/api/reports', async () => reports.list(requireSession().profileId).map(toDTO));
+  app.get('/api/reports', async (req) => reports.list(requireSession(req).profileId).map(toDTO));
 
   app.get('/api/reports/:id', async (req) => {
     const { id } = idParam.parse(req.params);
-    const r = reports.get(requireSession().profileId, id);
+    const r = reports.get(requireSession(req).profileId, id);
     if (!r) throw new HttpError(404, 'Reporte no encontrado', 'not_found');
     return toDTO(r);
   });
 
   app.post('/api/reports', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const def = reportDefinitionSchema.parse(req.body);
     const id = reports.create(s.profileId, def);
     return toDTO(reports.get(s.profileId, id)!);
   });
 
   app.put('/api/reports/:id', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { id } = idParam.parse(req.params);
     const def = reportDefinitionSchema.parse(req.body);
     if (!reports.update(s.profileId, id, def)) throw new HttpError(404, 'Reporte no encontrado', 'not_found');
@@ -56,7 +60,7 @@ export default async function reportRoutes(app: FastifyInstance) {
 
   app.delete('/api/reports/:id', async (req) => {
     const { id } = idParam.parse(req.params);
-    reports.remove(requireSession().profileId, id);
+    reports.remove(requireSession(req).profileId, id);
     return { ok: true };
   });
 
@@ -64,7 +68,7 @@ export default async function reportRoutes(app: FastifyInstance) {
   // Validación previa
   // -------------------------------------------------------------------------
   app.post('/api/reports/validate', async (req, reply) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const body = validateSchema.parse(req.body);
     let selection;
     if ('selection' in body) selection = body.selection;
@@ -86,7 +90,7 @@ export default async function reportRoutes(app: FastifyInstance) {
   // Jobs de generación
   // -------------------------------------------------------------------------
   app.post('/api/jobs', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const body = jobRequestSchema.parse(req.body);
     let definition;
     let reportId: number | null = null;
@@ -114,19 +118,21 @@ export default async function reportRoutes(app: FastifyInstance) {
     if (validation.status === 'error' && !body.force) {
       throw new HttpError(422, 'Hay medidores sin datos para las mediciones seleccionadas', 'validation_failed', validation);
     }
-    return createJob({ session: s, definition, reportId, selection, validation, forced: validation.status === 'error' });
+    const user = req.userSession!.user;
+    return createJob({ session: s, owner: { key: owner(req), user }, definition, reportId, selection, validation, forced: validation.status === 'error' });
   });
 
   app.get('/api/jobs/:id', async (req) => {
     const { id } = jobParam.parse(req.params);
-    const job = getJob(id);
+    const job = getJob(id, owner(req));
     if (!job) throw new HttpError(404, 'Job no encontrado', 'not_found');
     return job.state;
   });
 
   app.get('/api/jobs/:id/events', (req, reply) => {
     const { id } = jobParam.parse(req.params);
-    if (!getJob(id)) throw new HttpError(404, 'Job no encontrado', 'not_found');
+    const key = owner(req);
+    if (!getJob(id, key)) throw new HttpError(404, 'Job no encontrado', 'not_found');
     reply.hijack();
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -134,7 +140,7 @@ export default async function reportRoutes(app: FastifyInstance) {
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
-    const unsubscribe = subscribe(id, (state) => {
+    const unsubscribe = subscribe(id, key, (state) => {
       reply.raw.write(`data: ${JSON.stringify(state)}\n\n`);
     });
     const ping = setInterval(() => reply.raw.write(': ping\n\n'), 15_000);
@@ -146,12 +152,12 @@ export default async function reportRoutes(app: FastifyInstance) {
 
   app.post('/api/jobs/:id/cancel', async (req) => {
     const { id } = jobParam.parse(req.params);
-    return { ok: cancelJob(id) };
+    return { ok: cancelJob(id, owner(req)) };
   });
 
   app.get('/api/jobs/:id/download', async (req, reply) => {
     const { id } = jobParam.parse(req.params);
-    const job = getJob(id);
+    const job = getJob(id, owner(req));
     if (!job || job.state.status !== 'done') throw new HttpError(404, 'El archivo no está disponible (puede haber expirado)', 'not_found');
     const isZip = job.outFile.endsWith('.zip');
     reply
@@ -162,5 +168,5 @@ export default async function reportRoutes(app: FastifyInstance) {
     return reply.send(createReadStream(job.outFile));
   });
 
-  app.get('/api/history', async () => history.list(requireSession().profileId));
+  app.get('/api/history', async (req) => history.list(requireSession(req).profileId));
 }

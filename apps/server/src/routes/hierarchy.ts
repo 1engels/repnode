@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   hierarchyLayoutSchema, hierarchyMembersSchema, hierarchyUnassignSchema, panelCreateSchema, panelSaveSchema, planSupply,
@@ -80,15 +80,15 @@ function checkSpace(h: HierarchyDTO, spaceId: number | null, body: SpaceSave): v
 }
 
 export default async function hierarchyRoutes(app: FastifyInstance) {
-  const current = () => hierarchyDTO(requireSession());
+  const current = (req: FastifyRequest) => hierarchyDTO(requireSession(req));
 
-  app.get('/api/hierarchy', async () => current());
+  app.get('/api/hierarchy', async (req) => current(req));
 
   // -------------------------------------------------------------------------
   // Suministro: tableros
   // -------------------------------------------------------------------------
   app.post('/api/panels', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const body = panelCreateSchema.parse(req.body);
     const h = hierarchyDTO(s);
     checkPanel(s, h, null, body);
@@ -104,11 +104,11 @@ export default async function hierarchyRoutes(app: FastifyInstance) {
       if (isUnique(err)) throw new HttpError(409, `Ya existe un tablero llamado "${body.name}"`, 'duplicate');
       throw err;
     }
-    return current();
+    return current(req);
   });
 
   app.put('/api/panels/:id', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { id } = idParam.parse(req.params);
     const body = panelSaveSchema.parse(req.body);
     if (!panels.owns(s.profileId, id)) throw new HttpError(404, 'Tablero no encontrado', 'not_found');
@@ -122,18 +122,18 @@ export default async function hierarchyRoutes(app: FastifyInstance) {
       if (isUnique(err)) throw new HttpError(409, `Ya existe un tablero llamado "${body.name}"`, 'duplicate');
       throw err;
     }
-    return current();
+    return current(req);
   });
 
   app.delete('/api/panels/:id', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { id } = idParam.parse(req.params);
     panels.remove(s.profileId, id);
-    return current();
+    return current(req);
   });
 
   app.post('/api/panels/:id/loads', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { id } = idParam.parse(req.params);
     if (!panels.owns(s.profileId, id)) throw new HttpError(404, 'Tablero no encontrado', 'not_found');
     const body = hierarchyMembersSchema.parse(req.body);
@@ -143,66 +143,66 @@ export default async function hierarchyRoutes(app: FastifyInstance) {
     } else {
       transaction(() => panels.removeLoads(id, namesOf(s, body.sourceIds)));
     }
-    return current();
+    return current(req);
   });
 
   // -------------------------------------------------------------------------
   // Comercial: espacios
   // -------------------------------------------------------------------------
   app.post('/api/spaces', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const body = spaceCreateSchema.parse(req.body);
     checkSpace(hierarchyDTO(s), null, body);
     transaction(() => {
       const id = spaces.create(s.profileId, body, body.x, body.y);
       spaces.addMembers(s.profileId, id, namesOf(s, body.sourceIds));
     });
-    return current();
+    return current(req);
   });
 
   app.put('/api/spaces/:id', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { id } = idParam.parse(req.params);
     const body = spaceSaveSchema.parse(req.body);
     if (!spaces.owns(s.profileId, id)) throw new HttpError(404, 'Espacio no encontrado', 'not_found');
     checkSpace(hierarchyDTO(s), id, body);
     spaces.update(s.profileId, id, body);
-    return current();
+    return current(req);
   });
 
   app.delete('/api/spaces/:id', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { id } = idParam.parse(req.params);
     spaces.remove(s.profileId, id);
-    return current();
+    return current(req);
   });
 
   app.post('/api/spaces/:id/members', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const { id } = idParam.parse(req.params);
     if (!spaces.owns(s.profileId, id)) throw new HttpError(404, 'Espacio no encontrado', 'not_found');
     const body = hierarchyMembersSchema.parse(req.body);
     const names = namesOf(s, body.sourceIds);
     transaction(() => (body.action === 'add' ? spaces.addMembers(s.profileId, id, names) : spaces.removeMembers(id, names)));
-    return current();
+    return current(req);
   });
 
   // -------------------------------------------------------------------------
   // Comunes
   // -------------------------------------------------------------------------
   app.post('/api/hierarchy/unassign', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const body = hierarchyUnassignSchema.parse(req.body);
     const names = namesOf(s, body.sourceIds);
     transaction(() => (body.kind === 'supply' ? panels.unassign(s.profileId, names) : spaces.unassign(s.profileId, names)));
-    return current();
+    return current(req);
   });
 
   app.put('/api/hierarchy/layout', async (req) => {
-    const s = requireSession();
+    const s = requireSession(req);
     const body = hierarchyLayoutSchema.parse(req.body);
     if (body.reset) hierarchyLayout.reset(s.profileId, body.kind);
     if (body.positions.length) hierarchyLayout.set(s.profileId, body.kind, body.positions);
-    return current();
+    return current(req);
   });
 }

@@ -7,7 +7,9 @@ está organizado, sus flujos, las decisiones de diseño y los problemas ya resue
 
 ## 1. Propósito
 
-RepNode es una **app local**: un backend Node.js más una GUI web que se usan desde `localhost`. Se conecta a la base
+RepNode es un backend Node.js más una GUI web. Funciona en dos modos (`REPNODE_AUTH_MODE`, ver 5.12): **local** (un
+usuario en `localhost`, por defecto) o **embebido en PME** (varios usuarios de PME, en un iframe de PME, detrás de su IIS
+en `https://<servidor>/repnode/`). Se conecta a la base
 **ION_Data de Schneider Electric Power Monitoring Expert (PME)** en SQL Server 2016+ y genera **CSV descargables
 compatibles con Excel en Windows** con las mediciones de medidores eléctricos.
 
@@ -73,11 +75,15 @@ repnode/
 ├─ package.json               scripts raíz: dev, build, start, serve, typecheck, test
 ├─ pnpm-workspace.yaml        apps/*, packages/*
 ├─ tsconfig.base.json         strict, noEmit, verbatimModuleSyntax, erasableSyntaxOnly, allowImportingTsExtensions
-├─ .claude/launch.json        servidores de preview: repnode-api (3210) y repnode-web (5173)
+├─ .claude/launch.json        servidores de preview: repnode-api (3210) y repnode-web (5173; abrir /repnode/)
+├─ deploy/iis/web.config.example  regla de URL Rewrite + ARR para publicar /repnode en el sitio de PME
+├─ deploy/iis/repnode-auth/    aplicación IIS /repnode-auth (whoami.ashx + web.config): usuario de la sesión de PME
+├─ deploy/iis/instalar-repnode-auth.ps1  crea su pool y aplicación (comprueba antes el machineKey)
 ├─ database/ION_Data-creation-script.sql   esquema de PME (UTF-16 LE, ~3,5 MB) — solo referencia
 ├─ data/                      (git-ignorado) app.db, master.key, jobs/ (temporales)
 ├─ packages/shared/src/
-│  ├─ schemas.ts              zod: conexión, rango, salida, selección, reporte, job, tags (+ TAG_PALETTE), presets, settings
+│  ├─ schemas.ts              zod: conexión, rango, salida, selección, reporte, job, tags (+ TAG_PALETTE), presets, settings;
+│  │                          BASE_PATH ('/repnode')
 │  ├─ types.ts                DTOs de API (catálogo, validación, jobs, historial…)
 │  ├─ time.ts                 zonas horarias con Intl: tzOffsetMs, localToUtcMs, LocalTimeFormatter (caché 15 min)
 │  ├─ range.ts                resolveRange(): rangos fijos y relativos → local + UTC
@@ -91,7 +97,14 @@ repnode/
 ├─ apps/server/
 │  ├─ src/
 │  │  ├─ index.ts             Fastify, filtro de Host, manejo de errores, registro de rutas, estáticos en prod
-│  │  ├─ config.ts            host/puerto/rutas de datos (variables REPNODE_*), flag --prod
+│  │  ├─ config.ts            host/puerto/rutas de datos (variables REPNODE_*), flag --prod, runtimeConfig
+│  │  ├─ runtime-config.ts    parseRuntimeConfig(): modo (none|pme), hosts, sesiones, topes, autenticación PME
+│  │  ├─ multiuser.test.ts    pruebas de configuración, cookies, PME, CSRF, límite de intentos y sesiones
+│  │  ├─ auth/pme-auth.ts     valida la sesión de PME reenviando su cookie a REPNODE_PME_USER_URL (caché 30 s)
+│  │  ├─ http/security.ts     hook onRequest (Host, CSRF, sesión, autenticación) y onSend (CSP y encabezados)
+│  │  ├─ http/cookies.ts      parseCookies, pickCookieHeader, serializeCookie
+│  │  ├─ http/rate-limit.ts   límite de intentos fallidos por IP (conexión manual)
+│  │  ├─ sessions/registry.ts sesiones de usuario: creación, vencimiento, desalojo, ownerKey
 │  │  ├─ errors.ts            HttpError, describeSqlError (+ pruebas), isTransientSqlError
 │  │  ├─ production.ts        parseProductionEnv(): conexión a PME de producción desde variables REPNODE_* (+ pruebas)
 │  │  ├─ selection.ts         resolveMeters (directos + tags y nodos dinámicos) y resolveSelection
@@ -100,7 +113,7 @@ repnode/
 │  │  ├─ security/secrets.ts  clave maestra, HKDF, AES-256-GCM, profileIdFor (SHA-256)
 │  │  ├─ store/sqlite.ts      migraciones (PRAGMA user_version) y repositorios
 │  │  ├─ mssql/config.ts      buildMssqlConfig() (objeto plano, se pasa a los workers)
-│  │  ├─ mssql/session.ts     sesión activa única: pool, catálogo, verificación de versión y objetos
+│  │  ├─ mssql/session.ts     conexión SQL de una sesión: pool, catálogo compartido, verificación de versión y objetos
 │  │  ├─ mssql/catalog.ts     carga de Source/SourceType/Quantity/SourceQuantity
 │  │  ├─ mssql/queries.ts     SQL de extracción (dataSql) y cobertura (coverageSql)
 │  │  ├─ routes/connection.ts sesión, test, connect, disconnect, perfiles, conexión de producción
@@ -116,6 +129,7 @@ repnode/
 │  │     ├─ csv.ts            CsvFormatter (RFC 4180, decimal), BufferedWriter (contrapresión), BOM, EOL
 │  │     ├─ assemble.ts       une parciales (ancho/largo), arma el ZIP o combina por timestamp
 │  │     └─ protocol.ts       mensajes padre↔worker, MeterTask, partPath
+│  ├─ .env.example            plantilla de .env.local para el despliegue (modo pme, cuenta de servicio, topes)
 │  ├─ scripts/                (requieren .env.test.local)
 │  │  ├─ check-vm.ts          verificación contra SQL real: catálogo, paridad, cobertura, extracción
 │  │  ├─ bench.ts             benchmark enfoque anterior vs RepNode con combinaciones K×C
@@ -185,9 +199,21 @@ hacer `EXEC` de los SP; si reciben el error 229 (sin permiso), ejecutan el cuerp
 
 ### 5.1 Arranque y seguridad del servidor (`index.ts`)
 
-- Escucha en **`127.0.0.1:3210`** por defecto (`REPNODE_HOST`, `REPNODE_PORT`).
-- Hook `onRequest`: rechaza con 403 cualquier `Host` que no sea `localhost`, `127.0.0.1` o `[::1]`. Protege contra
-  DNS rebinding. El proxy de Vite conserva el Host `localhost` (`changeOrigin: false`).
+- Escucha en **`127.0.0.1:3210`** por defecto (`REPNODE_HOST`, `REPNODE_PORT`). **Todo vive bajo `BASE_PATH` =
+  `/repnode`** (shared), también en desarrollo: las rutas de `routes/*` se registran con `prefix` y la GUI compilada se
+  sirve en `/repnode/` (`/` y `/repnode` redirigen a `/repnode/`). Así es igual detrás del proxy de IIS de PME.
+- `trustProxy` solo para 127.0.0.1/::1 (el IIS del mismo equipo): `req.protocol`/`req.ip` salen de `X-Forwarded-*`.
+- Hooks de `http/security.ts`:
+  - `onRequest`: 403 si el `Host` no es localhost/127.0.0.1/[::1] ni está en `REPNODE_ALLOWED_HOSTS` (DNS rebinding;
+    el proxy de Vite conserva el Host, `changeOrigin: false`). En `/repnode/api/*`: **CSRF** (`isCrossSiteRequest`:
+    se rechaza un método no seguro con `Sec-Fetch-Site` cross-site/same-site o con un `Origin` que no es el Host ni un
+    host permitido; sin esos encabezados no es un navegador y se acepta), luego la sesión (5.2) y, en modo pme, la
+    autenticación (5.12).
+  - `onSend`: CSP (`frame-ancestors 'self'`, `script-src 'self'`, `style-src 'self' 'unsafe-inline'` por Vue Flow,
+    `worker-src 'self' blob:` por elkjs), `nosniff`, `Referrer-Policy`, HSTS si es https y `no-store` en la API.
+- Un archivo que no existe bajo `/repnode/` (p. ej. un asset) responde 404; el resto de rutas de la SPA, `index.html`.
+  `@fastify/static` va con `wildcard: false`: los archivos de `dist` se registran al arrancar, así que **tras
+  `pnpm build` hay que reiniciar el servidor**.
 - Manejador de errores: `HttpError` → `{ error, message, details }` con su status; `ZodError` → 400 con mensajes por campo.
 - En producción (`--prod` o `NODE_ENV=production`) sirve `apps/web/dist` con fallback SPA a `index.html`.
 - `disableRequestLogging: true`, para que los logs no se llenen con cada petición.
@@ -195,8 +221,18 @@ hacer `EXEC` de los SP; si reciben el error 229 (sin permiso), ejecutan el cuerp
 
 ### 5.2 Sesión SQL (`mssql/session.ts`)
 
-- **Una sola sesión activa** en memoria (app local de un usuario). Si el backend se reinicia, se pierde y la GUI vuelve a
-  la pantalla de conexión (respuesta 409 `not_connected` → `onNotConnected` en el frontend).
+- **Una sesión por navegador** (`sessions/registry.ts`): cookie `repnode.sid` (32 bytes aleatorios, `HttpOnly`,
+  `SameSite=Strict`, `Path=/repnode`, `Secure` si llega por https), creada en la primera petición a la API. Cada sesión
+  tiene **su propio pool de SQL** (`UserSession.sql`, `null` hasta conectarse). Las rutas obtienen la conexión con
+  `requireSession(req)` (`req.userSession`); 409 `not_connected` si no hay.
+  - Vence tras `REPNODE_SESSION_IDLE_MINUTES` (15) sin peticiones, salvo que su dueño tenga jobs en cola o en curso,
+    y siempre a las `REPNODE_SESSION_MAX_HOURS` (12). Se comprueba al leerla y cada minuto; al vencer se cierra su pool.
+  - Tope `REPNODE_MAX_SESSIONS` (100): se desaloja la más inactiva sin conexión ni jobs; si no hay, 503 `too_many_sessions`.
+  - Pool de cada sesión: `REPNODE_SESSION_POOL_MAX` o, si no está, `max(8, concurrency × 2)`. Con `min: 0` e
+    `idleTimeoutMillis: 30 s`, una sesión inactiva no retiene conexiones físicas.
+  - El **catálogo se comparte** entre sesiones de la misma base y login (`catalogKey`, con conteo de referencias);
+    `refreshCatalog(s)` lo recarga para todas.
+  - Si el backend se reinicia, las sesiones se pierden; la GUI se reconecta sola (ver 6, reconexión transparente).
 - `openPool()` verifica tres cosas: versión ≥ 13 (SQL 2016), que existan `Source`, `Quantity`, `SourceQuantity`,
   `DataLog2` y `vwDataLog2` en `dbo`, y luego carga el catálogo.
 - `buildMssqlConfig()`: `useUTC: true`, `packetSize: 32768`, `appName: 'RepNode'`.
@@ -267,7 +303,7 @@ Migraciones versionadas con `PRAGMA user_version`; para cambiar el esquema, **ag
   - Eliminar un tablero convierte las entradas que venían de él en fuentes externas con su nombre. Eliminar un espacio
     sube sus subespacios y medidores al padre (sin padre, los medidores quedan sin ubicar).
 - `job_history`: estado, filas, bytes, resumen de validación y error. Migración v3: `forced` (generado pese a errores de
-  validación) y `off_grid_rows` (filas extra fuera de la grilla).
+  validación) y `off_grid_rows` (filas extra fuera de la grilla). v7: `user_name` (usuario de PME que lo generó).
 - `settings`: clave/valor JSON. Valores por defecto: `workers = min(2, núcleos-1)`, `concurrency = 4`,
   `readUncommitted = true`, `downloadTtlMinutes = 60`, `requestTimeoutSeconds = 1800`.
 
@@ -314,7 +350,7 @@ zona horaria del reporte. Un `rangeOverride` reemplaza el rango solo para esa ej
 
 ```
 POST /api/jobs → resolveSelection → tope de grilla (400) → validateCached (422 si hay errores y no hay force) → createJob
-  job-manager: cola FIFO, un job a la vez → reparte medidores round-robin en K shards
+  job-manager: cola FIFO, hasta REPNODE_MAX_CONCURRENT_JOBS (1) a la vez → reparte medidores round-robin en K shards
     └─ K worker_threads (job-worker.ts), cada uno con su ConnectionPool (max = C) y p-limit(C)
          └─ extractMeter(): UNA consulta en streaming por medidor (todas sus mediciones)
               → RowSink (WideSink / LongSink) → BufferedWriter → data/jobs/<id>/<index>.part
@@ -324,6 +360,10 @@ POST /api/jobs → resolveSelection → tope de grilla (400) → validateCached 
 
 Detalles clave:
 
+- **Dueño**: cada job guarda `owner` = `ownerKey(sesión)` (`pme:<usuario>` en modo pme, `local` en modo local).
+  `getJob`/`cancelJob`/`subscribe` exigen ese dueño: para otro usuario el job no existe (404). Un usuario puede tener
+  hasta `REPNODE_MAX_JOBS_PER_USER` (2) en cola o en curso (429 `too_many_jobs`). `JobState.queuePosition` dice
+  cuántos hay antes; `hasActiveJobs(owner)` evita que su sesión venza por inactividad.
 - `dataSql`: `ORDER BY TimestampUTC, QuantityID` para ancho y ZIP (pivot en streaming) o `QuantityID, TimestampUTC`
   para largo (orden del índice). Lleva **`OPTION (OPTIMIZE FOR UNKNOWN)`**. **No usar `OPTION (RECOMPILE)`**: duplicaba
   el costo de cada consulta chica (medido: 15,7 vs 7,2 ms).
@@ -394,15 +434,17 @@ Detalles clave:
 
 ### 5.11 API REST
 
+Todas las rutas van bajo `/repnode` (p. ej. `GET /repnode/api/session`); la tabla las muestra sin el prefijo.
+
 | Método y ruta | Descripción |
 |---|---|
-| `GET /api/session` | Estado de la conexión |
+| `GET /api/session` | Estado de la conexión, `mode` (`none`/`pme`), `user` (de PME) e `idleMinutes` |
 | `POST /api/connection/test` | Prueba de conexión, con `{params,password}` o `{profileId,clientSecret}`; al editar, `{params,password:'',profileId,clientSecret}` usa la contraseña guardada |
 | `POST /api/connection/connect` | Conexión nueva (`params`, `password`, `remember`, `clientSecret`), edición de un perfil (lo mismo + `profileId`: conserva el id, siempre se guarda; `password` vacía = la guardada) o con perfil (`profileId`, `clientSecret`) |
 | `GET /api/connection/production` | `ProductionStatusDTO`: si está configurada (`missing` = variables que faltan) y si se pudo conectar (`available`, `error`); `?refresh=1` vuelve a probar |
 | `POST /api/connection/production/connect` | Conecta con las variables de entorno; 400 `production_not_configured` si faltan |
 | `POST /api/connection/disconnect` | Cierra el pool |
-| `GET /api/profiles` · `DELETE /api/profiles/:id` | Perfiles guardados en el servidor |
+| `GET /api/profiles` · `DELETE /api/profiles/:id` | Perfiles guardados en el servidor. En modo pme, `test`, `connect` y los perfiles responden 403 `manual_connection_disabled`; `test`/`connect` admiten 10 fallos por IP cada 5 min (429 `too_many_attempts`) |
 | `GET /api/catalog` · `POST /api/catalog/refresh` | Catálogo |
 | `GET/POST /api/tags`, `PUT/DELETE /api/tags/:id`, `POST /api/tags/:id/members` | Tags (`{sourceIds, action:'add'|'remove'}`); `POST` acepta `sourceIds` iniciales; cada operación devuelve la lista completa |
 | `GET/POST /api/tag-colors`, `DELETE /api/tag-colors/:hex` | Paleta personalizada (`{color:'#rrggbb'}`; en el DELETE, el hex va sin `#`); devuelven la lista |
@@ -420,20 +462,63 @@ Detalles clave:
 | `GET /api/jobs/:id` · `GET /api/jobs/:id/events` (SSE) · `POST /api/jobs/:id/cancel` · `GET /api/jobs/:id/download` | Ciclo de vida del job |
 | `GET /api/history` | Últimas 50 ejecuciones del perfil |
 
-Códigos de error frecuentes: `not_connected` (409), `connect_failed`, `invalid_database`, `unsupported_version`,
+Códigos de error frecuentes: `not_connected` (409), `not_authenticated` (401, modo pme; `details.loginUrl`),
+`pme_unavailable` (503), `too_many_sessions` (503), `too_many_jobs` (429), `too_many_attempts` (429),
+`manual_connection_disabled` (403), `forbidden` / `forbidden_origin` (403), `connect_failed`, `invalid_database`, `unsupported_version`,
 `decrypt_failed` (401), `profile_not_found`, `production_not_configured` (400), `validation_failed` (422), `grid_too_large` (400), `invalid_input` (400), `not_found`,
 `cycle` (400), `meter_in_use` (409), `duplicate` (409).
+
+### 5.12 Multiusuario embebido en PME (`REPNODE_AUTH_MODE=pme`)
+
+Despliegue: RepNode en el servidor de PME escuchando en 127.0.0.1:3210; el IIS de PME (URL Rewrite + ARR, regla en
+`deploy/iis/web.config.example`) publica `https://<servidor>/repnode/` → `http://127.0.0.1:3210/repnode/`, con
+`X-Forwarded-Proto: https`, Host conservado, búfer de respuesta 0 (SSE) y sin compresión dinámica en `/repnode`.
+Mismo origen que PME: no hay cookies de terceros, `SameSite=Strict` funciona dentro del iframe y el `localStorage` no
+queda aislado. La regla `^repnode(/.*)?$` no captura `/repnode-auth`. Hallazgos del servidor de PME (13.2, IIS 10): Forms Authentication de ASP.NET con la cookie
+`.APPLICATIONFRAMEWORK` (`Path=/`, HttpOnly, Secure) y `machineKey` compartido por sus aplicaciones; el iframe de PME
+(`webHostAppFrame`) no tiene `sandbox`; la CSP de PME tiene `frame-src *`.
+
+- **Autenticación** (`auth/pme-auth.ts`): RepNode no descifra la cookie de PME (no usa el `machineKey`). La reenvía
+  (solo las cookies de `REPNODE_PME_COOKIES`; la de RepNode nunca sale) a `REPNODE_PME_USER_URL`, un endpoint de PME
+  que exige sesión y devuelve el usuario en JSON (`REPNODE_PME_USER_FIELD` = ruta con puntos). 2xx con usuario → válida;
+  3xx/401/403 o sin usuario (p. ej. HTML del login) → 401 `not_authenticated`; otro error → 503 `pme_unavailable`, pero
+  una sesión ya validada con las mismas cookies sigue sirviendo. Resultados en caché 30 s por hash de cookie.
+  TLS: `REPNODE_PME_CA_FILE` o `REPNODE_PME_TLS_INSECURE=1` (solo si la URL es de este equipo).
+  - La sesión guarda el hash de las cookies de PME y se reconfirma cada `REPNODE_PME_RECHECK_SECONDS` (120). Si cambia
+    el usuario de PME en ese navegador, se cierra la sesión anterior y se crea otra. Sin cookie de PME → 401.
+  - **PME no expone un JSON con el usuario actual** (se buscó en el Network del navegador). Por eso el endpoint por
+    defecto es `http://127.0.0.1/repnode-auth/whoami.ashx` (campo `user`): una aplicación IIS propia (.NET 4.8, pool
+    `RepNodeAuth`) con `<forms name=".APPLICATIONFRAMEWORK" protection="All">` que hereda el `machineKey` del
+    `web.config` raíz del sitio (el instalador verifica que coincide con el de `/Web`; no se copian claves). Responde
+    `{"user":"..."}`, 401 sin sesión y 403 a peticiones que no son de este equipo (`Request.IsLocal`); no renueva la
+    cookie (`slidingExpiration="false"`). Va por http en loopback, así no hay problema con el certificado autofirmado.
+    Limitación: valida el ticket de Forms (vigente hasta su vencimiento); un cierre de sesión en PME borra la cookie
+    del navegador y RepNode deja de recibirla.
+- **SQL**: todos usan la cuenta de servicio (`REPNODE_SERVER`… de `production.ts`), cada sesión con su pool. La GUI se
+  conecta sola. Sin esas variables o con `REPNODE_PME_USER_URL` inválida, el servidor no arranca.
+- Tags, jerarquías y reportes se comparten (todos usan el mismo `profile_id` de la conexión de producción). Roles
+  (quién edita) quedan para la fase 2.
 
 ---
 
 ## 6. Frontend
 
+- Ruta base `/repnode/`: Vite `base` (de `BASE_PATH`), `createWebHistory(import.meta.env.BASE_URL)` y `apiUrl()` en
+  `lib/api.ts`, que antepone la base a `/api/...` (también para `EventSource` y descargas). Las imágenes de `public/`
+  se referencian con `import.meta.env.BASE_URL` (Vue no reescribe `src="/..."`).
 - Rutas: `/connect` (pública), `/reports`, `/reports/new`, `/reports/:id/edit`, `/tags`, `/hierarchy` (`meta.wide`: el
-  `<main>` usa todo el ancho), `/settings`. El guard redirige a `/connect` si no hay sesión.
+  `<main>` usa todo el ancho), `/settings`. El guard redirige a `/connect` si no hay sesión; en modo pme antes intenta
+  `session.autoConnect()` (conexión del servidor).
+- **Reconexión transparente** (`setReconnectHandler` en `main.ts` → `session.reconnect()`): ante un 409
+  `not_connected`, `api()` reconecta una vez (modo pme: conexión del servidor; local: lo último que usó la pestaña,
+  `sessionStorage` `repnode.lastConnection`, perfil recordado o producción) y repite la petición, así no se pierde lo
+  que se estaba editando. Si no puede, `onNotConnected` vuelve a `/connect`. Un 401 `not_authenticated` muestra el
+  aviso "Sesión de PME terminada" (App.vue), que lleva la ventana principal al login de PME con `ReturnUrl`.
 - **Orden y etiqueta de medidores en la GUI**: el store ordena por `Source.Name` (`GRUPO.MEDIDOR`, orden natural) y
   `MeterLabel` muestra el nombre con el **modelo** (`SourceType.Name`) al lado en gris claro; el DisplayName solo si
   difiere. El servidor sigue ordenando por DisplayName (orden de filas en el CSV).
-- **ConnectView**: botón verde **Conectar con PME de producción** arriba de "Conexiones recordadas": se consulta su estado
+- **ConnectView**: en modo pme solo muestra la conexión del servidor y su error (sin formulario ni perfiles), y el
+  encabezado muestra el usuario de PME sin botón Desconectar. En modo local: botón verde **Conectar con PME de producción** arriba de "Conexiones recordadas": se consulta su estado
   al abrir la vista (spinner "Comprobando…"); solo se habilita si `available`. Si no, muestra el motivo (variables que
   faltan o error de conexión) y "Reintentar" (`refresh`). Perfiles recordados (de `localStorage`, con conexión en un clic); perfiles del servidor sin secreto en
   este navegador ("ingresa la contraseña de nuevo"); formulario (instancia y puerto se excluyen entre sí en la GUI,
@@ -490,8 +575,8 @@ Códigos de error frecuentes: `not_connected` (409), `connect_failed`, `invalid_
   - Se abre solo cuando aparece un error nuevo estando en los pasos 3 o 4.
 - **Jobs** (`useJobRunner`): `POST /api/jobs` → `EventSource` → al llegar `done`, la descarga se dispara con un `<a download>`
   oculto. **JobProgressModal** muestra avance, filas, tamaño, tiempo, ETA, Cancelar y "Descargar de nuevo", más avisos si se
-  generó con faltantes (`forced`) o hubo filas fuera de la grilla (`offGridRows`). Un 422 abre
-  el modal de validación.
+  generó con faltantes (`forced`) o hubo filas fuera de la grilla (`offGridRows`). En cola muestra cuántos reportes hay
+  antes (`queuePosition`). Un 422 abre el modal de validación. El historial muestra "por <usuario>" en modo pme.
 - **TagsView** (`/tags`): configuración de tags fuera del flujo de reportes.
   - Panel lateral con dos tarjetas: **Nuevo tag** (nombre con espacios; `ColorPalette` = los 8 colores de `TAG_PALETTE`
     + un 9.º círculo con `<input type="color">`, que muestra el color elegido si no es de la base ni de los guardados,
@@ -591,8 +676,8 @@ Gotchas del frontend:
 
 ```bash
 pnpm install
-pnpm dev            # API :3210 (node --watch-path) + Vite :5173 (proxy /api). Si da `EACCES` al escuchar, Windows reservó el puerto (rango de exclusión de winnat): `net stop winnat && net start winnat` como administrador
-pnpm test           # vitest: shared (zonas horarias, rangos, nombres, selección de listas, grilla, columnas por timestamp, jerarquías) + server (CSV, sinks + grilla, combinación por timestamp, cifrado, classify, variables de producción, mensajes de error SQL)
+pnpm dev            # GUI http://localhost:5173/repnode/ + API :3210 (node --watch-path; Vite hace proxy de /repnode/api). Si da `EACCES` al escuchar, Windows reservó el puerto (rango de exclusión de winnat): `net stop winnat && net start winnat` como administrador
+pnpm test           # vitest: shared (zonas horarias, rangos, nombres, selección de listas, grilla, columnas por timestamp, jerarquías) + server (CSV, sinks + grilla, combinación por timestamp, cifrado, classify, variables de producción, mensajes de error SQL, multiusuario)
 pnpm typecheck      # tsc (shared, server) + vue-tsc (web)
 pnpm build          # vue-tsc + vite build → apps/web/dist
 pnpm serve          # build + start (un solo proceso en :3210)
@@ -600,7 +685,11 @@ pnpm serve          # build + start (un solo proceso en :3210)
 
 - `dev` del servidor usa `--watch-path=src --watch-path=../../packages/shared/src`. **No usar `node --watch` a secas**:
   en Windows detecta cambios falsos en `node_modules` (enlaces duros de pnpm) y reinicia en bucle.
-- Preview desde Claude Code: `.claude/launch.json` (`repnode-api`, `repnode-web`).
+- Preview desde Claude Code: `.claude/launch.json` (`repnode-api`, `repnode-web`); la GUI está en `/repnode/`.
+- La prueba "más de 16.000 columnas" de `timestamp-merge.test.ts` tarda ~20 s sola y puede pasar el timeout de 60 s
+  cuando corre en paralelo con las demás en una máquina cargada.
+- Modo pme sin PME real: un servidor HTTP mínimo que responda JSON con el usuario si recibe la cookie
+  `.APPLICATIONFRAMEWORK` (y 302 si no) sirve como `REPNODE_PME_USER_URL`, junto con un `REPNODE_DATA_DIR` aparte.
 - Verificación contra SQL Server real (copiar `apps/server/.env.test.example` a `.env.test.local`; **nunca versionar
   ni mostrar credenciales**):
   - `pnpm --filter @repnode/server check:vm`: conexión, catálogo y **paridad fila a fila** contra

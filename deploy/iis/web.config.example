@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Regla de proxy inverso para publicar RepNode dentro del sitio de PME: https://<servidor>/repnode/ → http://127.0.0.1:3210/repnode/
+  Mismo origen que PME: el navegador envía la cookie de sesión de PME a RepNode y el iframe no es contenido de terceros.
+
+  NO reemplaces el web.config raíz del sitio (C:\inetpub\wwwroot\web.config): tiene el machineKey que comparten las
+  aplicaciones de PME. Agrega dentro de su <configuration> solo los bloques <system.webServer> y <location> de abajo
+  (si ya existe <system.webServer>, agrega <rewrite> dentro de él). Haz una copia de respaldo antes.
+
+  Requisitos previos (una vez, en PowerShell como administrador). Activan el proxy de ARR, que hoy está apagado:
+    %windir%\system32\inetsrv\appcmd.exe set config -section:system.webServer/proxy /enabled:"True" /preserveHostHeader:"True" /responseBufferLimit:"0" /timeout:"00:30:00" /commit:apphost
+    %windir%\system32\inetsrv\appcmd.exe set config -section:system.webServer/rewrite/allowedServerVariables /+"[name='HTTP_X_FORWARDED_PROTO']" /commit:apphost
+
+  - responseBufferLimit 0: el progreso de los reportes llega por SSE y no debe quedar retenido en el búfer de ARR.
+  - timeout 30 min: descargas grandes y conexiones de progreso largas (RepNode envía un latido cada 15 s).
+-->
+<configuration>
+  <system.webServer>
+    <rewrite>
+      <rules>
+        <!-- RepNode solo por HTTPS: su cookie de sesión es Secure -->
+        <rule name="RepNode HTTPS" stopProcessing="true">
+          <match url="^repnode(/.*)?$" />
+          <conditions>
+            <add input="{HTTPS}" pattern="off" />
+          </conditions>
+          <action type="Redirect" url="https://{HTTP_HOST}/{R:0}" redirectType="Found" />
+        </rule>
+        <rule name="RepNode proxy" stopProcessing="true">
+          <match url="^repnode(/.*)?$" />
+          <serverVariables>
+            <set name="HTTP_X_FORWARDED_PROTO" value="https" />
+          </serverVariables>
+          <action type="Rewrite" url="http://127.0.0.1:3210/repnode{R:1}" />
+        </rule>
+      </rules>
+    </rewrite>
+  </system.webServer>
+
+  <!-- La compresión dinámica de IIS retendría los eventos de progreso (text/event-stream) -->
+  <location path="repnode">
+    <system.webServer>
+      <urlCompression doDynamicCompression="false" />
+    </system.webServer>
+  </location>
+</configuration>

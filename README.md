@@ -36,10 +36,12 @@ subespacios.
 
 ```bash
 pnpm install
-pnpm dev        # API en http://localhost:3210 + GUI en http://localhost:5173
+pnpm dev        # GUI en http://localhost:5173/repnode/ (API en :3210, por el proxy de Vite)
 ```
 
-Producción (un solo proceso que sirve la GUI compilada en http://localhost:3210):
+Todo se publica bajo la ruta `/repnode/`, también en desarrollo, para que funcione igual detrás del IIS de PME.
+
+Producción (un solo proceso que sirve la GUI compilada en http://localhost:3210/repnode/):
 
 ```bash
 pnpm serve      # = pnpm build && pnpm start
@@ -62,6 +64,46 @@ botón verde **Conectar con PME de producción**, que se activa solo si la conex
 | `REPNODE_AUTH_PASS` | Contraseña del usuario SQL (obligatoria). Nunca se envía al navegador |
 
 Se autentica con usuario SQL y confía en el certificado del servidor. Al cambiar las variables hay que reiniciar RepNode.
+
+### Sesiones
+
+Cada navegador tiene su propia sesión (cookie `repnode.sid`, HttpOnly) y, al conectarse, su propio pool de conexiones a
+SQL Server. La sesión se cierra tras **15 minutos sin actividad** (un reporte en curso cuenta como actividad) o a las
+12 horas. Si vence, la GUI se reconecta sola con lo último que usó esa pestaña y no se pierde lo que se estaba editando.
+
+## Despliegue en PME (varios usuarios, embebido en un iframe)
+
+RepNode se publica en el mismo sitio de PME, `https://<servidor>/repnode/`, con el IIS de PME como proxy inverso
+hacia `http://127.0.0.1:3210`. Al ser el mismo origen, el navegador envía a RepNode la cookie de sesión de PME
+(`.APPLICATIONFRAMEWORK`): RepNode se la reenvía a un endpoint de PME que devuelve el usuario actual y así sabe quién
+es, sin pedir otra contraseña. Todos los usuarios usan la cuenta de servicio de SQL (`REPNODE_*`), cada uno con su
+propio pool; la conexión manual y las conexiones recordadas quedan desactivadas.
+
+1. **Instalar** RepNode en el servidor de PME (Node.js 24+), `pnpm install` y `pnpm build`.
+2. **Configurar** `apps/server/.env.local` a partir de [`apps/server/.env.example`](apps/server/.env.example):
+   `REPNODE_AUTH_MODE=pme`, la cuenta de servicio y `REPNODE_ALLOWED_HOSTS`.
+3. **Endpoint del usuario** (`/repnode-auth`): PME no expone un JSON con el usuario actual, así que se instala una
+   aplicación IIS mínima ([`deploy/iis/repnode-auth`](deploy/iis/repnode-auth)) que valida la cookie de PME igual que
+   PME (mismo nombre de cookie y el `machineKey` heredado del `web.config` raíz, sin copiar claves) y responde
+   `{"user":"..."}`. Solo atiende a este mismo equipo y no modifica PME. Como administrador, desde `deploy\iis`:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\instalar-repnode-auth.ps1
+   ```
+   El script comprueba que el `machineKey` raíz coincide con el de `/Web`, crea el pool `RepNodeAuth` y la aplicación
+   `/repnode-auth`, y prueba que sin sesión responde 401. Para probar con tu sesión, copia el valor de la cookie
+   `.APPLICATIONFRAMEWORK` (F12 → Application → Cookies) y, en el servidor:
+   ```powershell
+   curl.exe -s -i -H "Cookie: .APPLICATIONFRAMEWORK=VALOR" http://127.0.0.1/repnode-auth/whoami.ashx
+   ```
+   Debe responder 200 con tu usuario. Luego cierra esa sesión de PME (la cookie copiada deja de servir).
+4. **IIS**: agregar la regla de [`deploy/iis/web.config.example`](deploy/iis/web.config.example) al `web.config`
+   raíz del sitio (sin reemplazarlo) y ejecutar los dos comandos `appcmd` que indica (activan el proxy de ARR).
+5. **Servicio**: ejecutar `pnpm start` como tarea o servicio de Windows que arranque con el equipo, con una cuenta de
+   bajo privilegio que pueda leer y escribir solo la carpeta `data/` (contiene `master.key` y `app.db`). Por ejemplo,
+   con el Programador de tareas ("Al iniciar el sistema", "Reiniciar si se produce un error").
+6. **PME**: registrar la aplicación web con la URL `/repnode/`.
+
+Si falta alguna variable obligatoria del modo pme, RepNode no arranca y explica qué falta en el log.
 
 ## Arquitectura
 

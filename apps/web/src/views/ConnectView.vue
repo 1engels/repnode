@@ -58,7 +58,8 @@ async function checkProduction(refresh = false) {
 }
 
 onMounted(() => {
-  session.loadServerProfiles().catch(() => {});
+  // Embebido en PME no hay conexiones manuales ni perfiles: solo la del servidor
+  if (!session.isPme) session.loadServerProfiles().catch(() => {});
   checkProduction();
 });
 
@@ -179,10 +180,14 @@ async function forget(p: { id: string; name: string }) {
 </script>
 
 <template>
-  <div class="mx-auto grid max-w-5xl gap-6 lg:grid-cols-[1fr_1.2fr]">
-    <section>
+  <div class="mx-auto grid max-w-5xl gap-6" :class="!session.isPme && 'lg:grid-cols-[1fr_1.2fr]'">
+    <section :class="session.isPme && 'mx-auto w-full max-w-lg'">
       <h1 class="text-2xl font-semibold text-slate-900">Conectar a SQL Server</h1>
       <p class="mt-1 text-sm text-slate-600">Base de datos ION_Data de Power Monitoring Expert (SQL Server 2016 o superior).</p>
+      <!-- Si la comprobación de abajo ya muestra el error de conexión, no se repite -->
+      <div v-if="session.isPme && session.autoConnectError && production?.available" class="mt-4 flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+        <Icon name="error" :size="18" class="mt-0.5 shrink-0" /> <span>No se pudo conectar automáticamente: {{ session.autoConnectError }}</span>
+      </div>
 
       <div class="mt-6">
         <button
@@ -211,7 +216,7 @@ async function forget(p: { id: string; name: string }) {
         <div v-else-if="production.serverVersion" class="mt-1.5 text-xs text-emerald-700">Disponible · SQL Server {{ production.serverVersion }}</div>
       </div>
 
-      <div class="mt-6 space-y-3">
+      <div v-if="!session.isPme" class="mt-6 space-y-3">
         <h2 class="label">Conexiones recordadas</h2>
         <p v-if="!session.localProfiles.length && !orphanProfiles.length" class="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">
           Aún no hay conexiones guardadas. Marca «Recordar» al conectarte.
@@ -241,7 +246,7 @@ async function forget(p: { id: string; name: string }) {
         </div>
       </div>
 
-      <div class="mt-6 rounded-lg bg-slate-100 p-4 text-xs leading-relaxed text-slate-600">
+      <div v-if="!session.isPme" class="mt-6 rounded-lg bg-slate-100 p-4 text-xs leading-relaxed text-slate-600">
         <p class="font-semibold text-slate-700">¿Cómo se protegen las credenciales?</p>
         <p class="mt-1">
           La contraseña se cifra con AES-256-GCM. La clave se deriva de una llave del servidor local y de un secreto aleatorio que solo guarda este
@@ -250,7 +255,7 @@ async function forget(p: { id: string; name: string }) {
       </div>
     </section>
 
-    <form class="card p-6" @submit.prevent="connect">
+    <form v-if="!session.isPme" class="card p-6" @submit.prevent="connect">
       <div v-if="editing" class="mb-4 flex items-start gap-3 rounded-lg border border-brand-100 bg-brand-50 p-3 text-sm text-slate-800">
         <Icon name="edit" :size="18" class="mt-0.5 shrink-0" />
         <div class="min-w-0 flex-1">

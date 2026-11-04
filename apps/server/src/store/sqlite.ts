@@ -151,6 +151,10 @@ const migrations: string[] = [
   ALTER TABLE panels ADD COLUMN color TEXT;
   ALTER TABLE panels ADD COLUMN icon TEXT NOT NULL DEFAULT 'other';
   `,
+  // v7: usuario de PME que generó cada ejecución (modo multiusuario)
+  `
+  ALTER TABLE job_history ADD COLUMN user_name TEXT;
+  `,
 ];
 
 function migrate(): void {
@@ -645,11 +649,11 @@ export const reports = {
 // ---------------------------------------------------------------------------
 
 export const history = {
-  insert(e: { id: string; profileId: string; reportId: number | null; reportName: string; fileName: string; meters: number; validation: unknown; forced: boolean }): void {
+  insert(e: { id: string; profileId: string; user: string | null; reportId: number | null; reportName: string; fileName: string; meters: number; validation: unknown; forced: boolean }): void {
     db.prepare(
-      `INSERT INTO job_history (id, profile_id, report_id, report_name, status, file_name, meters, validation_json, started_at, forced)
-       VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
-    ).run(e.id, e.profileId, e.reportId, e.reportName, e.fileName, e.meters, e.validation ? JSON.stringify(e.validation) : null, new Date().toISOString(), b(e.forced));
+      `INSERT INTO job_history (id, profile_id, user_name, report_id, report_name, status, file_name, meters, validation_json, started_at, forced)
+       VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+    ).run(e.id, e.profileId, e.user, e.reportId, e.reportName, e.fileName, e.meters, e.validation ? JSON.stringify(e.validation) : null, new Date().toISOString(), b(e.forced));
   },
   finish(id: string, status: JobStatus, rows: number, bytes: number, error: string | null, offGridRows: number): void {
     db.prepare('UPDATE job_history SET status = ?, rows = ?, bytes = ?, error = ?, finished_at = ?, off_grid_rows = ? WHERE id = ?')
@@ -671,6 +675,7 @@ export const history = {
       error: (r.error as string | null) ?? null,
       forced: !!r.forced,
       offGridRows: (r.off_grid_rows as number) ?? 0,
+      user: (r.user_name as string | null) ?? null,
     }));
   },
   /** Ejecuciones que quedaron a medias si el proceso se cerró. */
