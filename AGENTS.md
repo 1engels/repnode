@@ -489,7 +489,12 @@ queda aislado. La regla `^repnode(/.*)?$` no captura `/repnode-auth`. Hallazgos 
   - **PME no expone un JSON con el usuario actual** (se buscó en el Network del navegador). Por eso el endpoint por
     defecto es `http://127.0.0.1/repnode-auth/whoami.ashx` (campo `user`): una aplicación IIS propia (.NET 4.8, pool
     `RepNodeAuth`) con `<forms name=".APPLICATIONFRAMEWORK" protection="All">` que hereda el `machineKey` del
-    `web.config` raíz del sitio (el instalador verifica que coincide con el de `/Web`; no se copian claves). Responde
+    `web.config` raíz del sitio (no se copian claves). **El `machineKey` de PME es `AutoGenerate`** (claves generadas
+    por Windows por identidad del pool; los pools de PME corren como NetworkService y por eso comparten la cookie): el
+    pool de `/repnode-auth` debe tener **la misma identidad que el de `/Web`**. Con ApplicationPoolIdentity la cookie
+    no se descifraba (401). El instalador copia la identidad del pool de `/Web` (o usa ese pool si no se puede replicar)
+    y avisa si hay `IsolateApps`. `whoami.ashx?diag=1` (solo local) informa si llegó la cookie, el resultado de
+    `FormsAuthentication.Decrypt`, la identidad del pool y la configuración de `machineKey`/forms de ambos lados. Responde
     `{"user":"..."}`, 401 sin sesión y 403 a peticiones que no son de este equipo (`Request.IsLocal`); no renueva la
     cookie (`slidingExpiration="false"`). Va por http en loopback, así no hay problema con el certificado autofirmado.
     Limitación: valida el ticket de Forms (vigente hasta su vencimiento); un cierre de sesión en PME borra la cookie

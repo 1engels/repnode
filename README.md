@@ -89,8 +89,10 @@ propio pool; la conexión manual y las conexiones recordadas quedan desactivadas
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\instalar-repnode-auth.ps1
    ```
-   El script comprueba que el `machineKey` raíz coincide con el de `/Web`, crea el pool `RepNodeAuth` y la aplicación
-   `/repnode-auth`, y prueba que sin sesión responde 401. Para probar con tu sesión, copia el valor de la cookie
+   El script comprueba el `machineKey` de la raíz y de `/Web`, crea el pool `RepNodeAuth` **con la misma identidad que
+   el pool de `/Web`** (NetworkService) y la aplicación `/repnode-auth`, y prueba que sin sesión responde 401. PME usa
+   `machineKey` `AutoGenerate`: las claves dependen de la identidad del pool, así que con otra identidad la cookie no se
+   podría leer. `whoami.ashx?diag=1` (solo desde el servidor) explica por qué una cookie no se acepta, sin claves. Para probar con tu sesión, copia el valor de la cookie
    `.APPLICATIONFRAMEWORK` (F12 → Application → Cookies) y, en el servidor:
    ```powershell
    curl.exe -s -i -H "Cookie: .APPLICATIONFRAMEWORK=VALOR" http://127.0.0.1/repnode-auth/whoami.ashx

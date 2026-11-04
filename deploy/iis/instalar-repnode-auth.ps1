@@ -2,6 +2,10 @@
 # Instala la aplicacion IIS /repnode-auth: un endpoint minimo que devuelve el usuario de la sesion de PME a RepNode.
 # No modifica las aplicaciones de PME: crea un application pool y una aplicacion nuevos en "Default Web Site".
 #
+# PME usa machineKey AutoGenerate: Windows genera las claves por identidad del application pool. Para poder leer la
+# cookie de PME, /repnode-auth corre con la misma identidad que el pool de /Web (NetworkService en PME 13.2). Si esa
+# identidad es propia del pool (ApplicationPoolIdentity) o un usuario especifico, se usa directamente el pool de /Web.
+#
 # Uso (PowerShell como administrador, en el servidor de PME, desde la carpeta deploy\iis del repositorio):
 #   powershell -ExecutionPolicy Bypass -File .\instalar-repnode-auth.ps1
 # Opcional: -Destino C:\RepNode\repnode-auth  -Sitio "Default Web Site"
@@ -37,7 +41,8 @@ function MachineKeyAttributes([string]$webConfig) {
   $xml.Load($webConfig)
   $mk = $xml.SelectSingleNode('/configuration/system.web/machineKey')
   if ($null -eq $mk) { return '(sin machineKey: hereda)' }
-  $attrs = @($mk.Attributes | Where-Object { $_.Name -notin @('validationKey', 'decryptionKey') } | ForEach-Object { "$($_.Name)=$($_.Value)" })
+  # Las claves solo se muestran si son "AutoGenerate..." (no son secretas); una clave real nunca
+  $attrs = @($mk.Attributes | Where-Object { $_.Name -notin @('validationKey', 'decryptionKey') -or $_.Value -like 'AutoGenerate*' } | ForEach-Object { "$($_.Name)=$($_.Value)" })
   if ($attrs.Count -eq 0) { return '(solo claves)' }
   return $attrs -join ' '
 }
@@ -58,21 +63,35 @@ if ($pmeHash -and $pmeHash -ne $rootHash) {
 Write-Host "machineKey del sitio y de $AplicacionPme coinciden (huella $rootHash)"
 Write-Host "  atributos raiz : $(MachineKeyAttributes $rootConfig)"
 Write-Host "  atributos $AplicacionPme : $(MachineKeyAttributes $pmeConfig)"
+if ((MachineKeyAttributes $rootConfig) -match 'Isolate') {
+  Write-Warning 'El machineKey usa IsolateApps/IsolateByAppId: las claves dependen de cada aplicacion y /repnode-auth no podria leer la cookie de PME. Avisa antes de seguir.'
+}
 
 Paso "Copiando archivos a $Destino"
 New-Item -ItemType Directory -Force -Path $Destino | Out-Null
 Copy-Item -Path (Join-Path $PSScriptRoot 'repnode-auth\*') -Destination $Destino -Force
-# El application pool y el usuario anonimo de IIS solo necesitan leer
-icacls $Destino /grant 'IIS_IUSRS:(OI)(CI)RX' 'IUSR:(OI)(CI)RX' | Out-Null
+# El application pool (IIS_IUSRS, NetworkService por SID: su nombre cambia con el idioma) y el usuario anonimo solo leen
+icacls $Destino /grant 'IIS_IUSRS:(OI)(CI)RX' 'IUSR:(OI)(CI)RX' '*S-1-5-20:(OI)(CI)RX' | Out-Null
 
-Paso "Application pool $Pool"
-if (-not (Test-Path "IIS:\AppPools\$Pool")) {
-  New-WebAppPool -Name $Pool | Out-Null
+Paso "Application pool (misma identidad que $AplicacionPme)"
+$pmePool = $pmeApp.applicationPool
+$pmeIdentity = (Get-ItemProperty "IIS:\AppPools\$pmePool" -Name processModel.identityType)
+if ($pmeIdentity -isnot [string]) { $pmeIdentity = [string]$pmeIdentity.Value }
+Write-Host "Pool de $AplicacionPme : $pmePool (identidad $pmeIdentity)"
+if ($pmeIdentity -in @('NetworkService', 'LocalService', 'LocalSystem')) {
+  if (-not (Test-Path "IIS:\AppPools\$Pool")) {
+    New-WebAppPool -Name $Pool | Out-Null
+  }
+  Set-ItemProperty "IIS:\AppPools\$Pool" -Name managedRuntimeVersion -Value 'v4.0'
+  Set-ItemProperty "IIS:\AppPools\$Pool" -Name managedPipelineMode -Value 'Integrated'
+  Set-ItemProperty "IIS:\AppPools\$Pool" -Name processModel.identityType -Value $pmeIdentity
+  try { Restart-WebAppPool -Name $Pool } catch { Start-WebAppPool -Name $Pool -ErrorAction SilentlyContinue }
+  Write-Host "Pool $Pool listo (.NET v4.0, integrado, $pmeIdentity)"
+} else {
+  # Identidad propia del pool o usuario especifico: solo el mismo pool tiene las mismas claves
+  $Pool = $pmePool
+  Write-Host "Se usa el pool de PME ($Pool): su identidad no se puede replicar en otro pool"
 }
-Set-ItemProperty "IIS:\AppPools\$Pool" -Name managedRuntimeVersion -Value 'v4.0'
-Set-ItemProperty "IIS:\AppPools\$Pool" -Name managedPipelineMode -Value 'Integrated'
-Set-ItemProperty "IIS:\AppPools\$Pool" -Name processModel.identityType -Value 'ApplicationPoolIdentity'
-Write-Host 'Listo (.NET v4.0, integrado, ApplicationPoolIdentity)'
 
 Paso 'Aplicacion /repnode-auth'
 if (Get-WebApplication -Site $Sitio -Name 'repnode-auth') {
