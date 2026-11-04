@@ -30,6 +30,18 @@ function MachineKeyHash([string]$webConfig) {
   return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($raw))).Replace('-', '').Substring(0, 16)
 }
 
+# Atributos del machineKey que no son claves (p. ej. compatibilityMode), para compararlos a la vista
+function MachineKeyAttributes([string]$webConfig) {
+  if (-not (Test-Path -LiteralPath $webConfig)) { return '(sin web.config)' }
+  $xml = New-Object System.Xml.XmlDocument
+  $xml.Load($webConfig)
+  $mk = $xml.SelectSingleNode('/configuration/system.web/machineKey')
+  if ($null -eq $mk) { return '(sin machineKey: hereda)' }
+  $attrs = @($mk.Attributes | Where-Object { $_.Name -notin @('validationKey', 'decryptionKey') } | ForEach-Object { "$($_.Name)=$($_.Value)" })
+  if ($attrs.Count -eq 0) { return '(solo claves)' }
+  return $attrs -join ' '
+}
+
 Paso 'Comprobando que /repnode-auth podra leer la cookie de PME'
 $site = Get-Website -Name $Sitio
 if (-not $site) { throw "No existe el sitio '$Sitio'" }
@@ -44,6 +56,8 @@ if ($pmeHash -and $pmeHash -ne $rootHash) {
   throw "El machineKey de $AplicacionPme no coincide con el del web.config raiz (huellas $pmeHash / $rootHash). Avisa antes de continuar."
 }
 Write-Host "machineKey del sitio y de $AplicacionPme coinciden (huella $rootHash)"
+Write-Host "  atributos raiz : $(MachineKeyAttributes $rootConfig)"
+Write-Host "  atributos $AplicacionPme : $(MachineKeyAttributes $pmeConfig)"
 
 Paso "Copiando archivos a $Destino"
 New-Item -ItemType Directory -Force -Path $Destino | Out-Null
@@ -74,7 +88,15 @@ Paso 'Prueba sin sesion de PME (debe responder 401)'
 Start-Sleep -Seconds 2
 $code = & curl.exe -s -o NUL -w '%{http_code}' 'http://127.0.0.1/repnode-auth/whoami.ashx'
 Write-Host "Respuesta: $code"
-if ($code -ne '401') { Write-Warning 'Se esperaba 401. Revisa el visor de eventos o abre la URL en el navegador del servidor para ver el error.' }
+if ($code -ne '401') {
+  Write-Warning 'Se esperaba 401. Encabezados de la respuesta:'
+  & curl.exe -s -i -o NUL -D - 'http://127.0.0.1/repnode-auth/whoami.ashx' | Select-String -Pattern '^(HTTP/|Location:)'
+  Write-Warning 'Si el error persiste, abre la URL en el navegador del servidor o revisa el visor de eventos.'
+}
+
+Write-Host ''
+$ver = & curl.exe -s -o NUL -D - 'http://127.0.0.1/repnode-auth/whoami.ashx' | Select-String -Pattern '^X-RepNode-Auth:'
+Write-Host "Version instalada: $(if ($ver) { $ver.Line } else { 'desconocida (archivo anterior?)' })"
 
 Write-Host ''
 Write-Host 'Siguiente paso: probar con tu cookie de PME (ver README, "Despliegue en PME").' -ForegroundColor Green
