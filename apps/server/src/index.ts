@@ -104,3 +104,4 @@ process.on('SIGTERM', shutdown);
 
 await app.listen({ host: config.host, port: config.port });
 app.log.info(`RepNode escuchando en http://${config.host === '127.0.0.1' ? 'localhost' : config.host}:${config.port}${base}/  (modo: ${runtimeConfig.authMode}, datos: ${config.dataDir})`);
+app.log.info(`Hosts permitidos: localhost, 127.0.0.1, [::1]${runtimeConfig.allowedHosts.length ? ', ' + runtimeConfig.allowedHosts.join(', ') : ''}`);

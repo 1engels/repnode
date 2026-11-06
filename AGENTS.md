@@ -79,6 +79,7 @@ repnode/
 ├─ deploy/iis/web.config.example  regla de URL Rewrite + ARR para publicar /repnode en el sitio de PME
 ├─ deploy/iis/repnode-auth/    aplicación IIS /repnode-auth (whoami.ashx + web.config): usuario de la sesión de PME
 ├─ deploy/iis/instalar-repnode-auth.ps1  crea su pool y aplicación (comprueba antes el machineKey)
+├─ deploy/iis/publicar-repnode.ps1  aplica la regla de web.config.example con cmdlets de IIS (respaldo, -Quitar)
 ├─ database/ION_Data-creation-script.sql   esquema de PME (UTF-16 LE, ~3,5 MB) — solo referencia
 ├─ data/                      (git-ignorado) app.db, master.key, jobs/ (temporales)
 ├─ packages/shared/src/
@@ -93,6 +94,7 @@ repnode/
 │  ├─ timestamp-layout.ts     formato por estampa de tiempo: orden de columnas y reparto en archivos (+ pruebas)
 │  ├─ hierarchy.ts            jerarquías: grafo de suministro, árbol de espacios, ciclos, planes al soltar, diagnóstico,
 │  │                          árbol aplanado para listas, orden indentado de tableros (+ pruebas)
+│  ├─ hierarchy-export.ts     supplyCsvRows/spacesCsvRows: tablas CSV de las jerarquías (+ pruebas)
 │  ├─ pme-user.ts             pmeDisplayName(): nombre visible de un IdentityId de PME (+ pruebas)
 │  └─ time.test.ts
 ├─ apps/server/
@@ -609,7 +611,18 @@ queda aislado. La regla `^repnode(/.*)?$` no captura `/repnode-auth`. Hallazgos 
   centrar su nodo), lienzo Vue Flow y panel de detalle + **Problemas del diseño**
   (`diagnoseSupply`/`diagnoseSpaces` de shared; clic centra el nodo; contador en la pestaña). Una derivación genera la
   advertencia `shared_feeder` en el tablero de origen: el medidor mide la suma de sus destinos, no cada entrada (los
-  futuros cálculos de balance no deben sumarlo una vez por tablero).
+  futuros cálculos de balance no deben sumarlo una vez por tablero). `DesignIssue.sourceId` identifica ese medidor.
+  - **Descargar CSV** (barra del lienzo): se arma en el navegador con `downloadCsv` (sin endpoint) y exporta la
+    pestaña activa, `suministro-AAAAMMDD-HHmm.csv` o `comercial-…`.
+    - Suministro (`supplyCsvRows`): una fila por **lugar** de cada medidor, en el orden de `supplyPanelOrder`. Por
+      tablero: entradas externas, totalizador, alimentadores (una fila por destino; una derivación da N filas con
+      `Destinos` = N) y salidas; también las conexiones sin medidor, una fila "Tablero sin medidores" si no tiene filas
+      propias y, al final, los medidores "Sin ubicar". Columnas en `SUPPLY_CSV_COLUMNS`: datos del medidor, rol,
+      tablero donde está físicamente (modo, nivel, raíz y ruta por el padre primario), entrada destino (en una entrada
+      externa, la del propio tablero), origen externo, ruta del espacio en Comercial, problemas de la fila
+      (entrada, totalizador o derivación) y problemas del tablero (repetidos en todas sus filas).
+    - Comercial (`spacesCsvRows`): una fila por medidor de cada espacio (orden de árbol), una por espacio vacío y los
+      sin ubicar al final, con su tablero y rol en Suministro (`SPACES_CSV_COLUMNS`).
   - Cajas: `panel-node` (encabezado con el **ícono** del tablero a la izquierda y su **color** al 50 % de opacidad,
     sufijo alfa `80`; terminales de entrada arriba como *handles* `in-0…in-N` + `in-new`; zona **Σ Totalizador**
     con su medidor y la fórmula "= E1 + E2" o "activa: E1 | E2"; **Salidas** (`panelOutputs` de shared): una fila por
@@ -689,7 +702,7 @@ Gotchas del frontend:
 ```bash
 pnpm install
 pnpm dev            # GUI http://localhost:5173/repnode/ + API :3210 (node --watch-path; Vite hace proxy de /repnode/api). Si da `EACCES` al escuchar, Windows reservó el puerto (rango de exclusión de winnat): `net stop winnat && net start winnat` como administrador
-pnpm test           # vitest: shared (zonas horarias, rangos, nombres, selección de listas, grilla, columnas por timestamp, jerarquías) + server (CSV, sinks + grilla, combinación por timestamp, cifrado, classify, variables de producción, mensajes de error SQL, multiusuario)
+pnpm test           # vitest: shared (zonas horarias, rangos, nombres, selección de listas, grilla, columnas por timestamp, jerarquías, CSV de jerarquías) + server (CSV, sinks + grilla, combinación por timestamp, cifrado, classify, variables de producción, mensajes de error SQL, multiusuario)
 pnpm typecheck      # tsc (shared, server) + vue-tsc (web)
 pnpm build          # vue-tsc + vite build → apps/web/dist
 pnpm serve          # build + start (un solo proceso en :3210)

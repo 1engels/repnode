@@ -10,7 +10,7 @@ import '@vue-flow/core/dist/theme-default.css';
 import '@vue-flow/controls/dist/style.css';
 import '@vue-flow/minimap/dist/style.css';
 import {
-  MAX_PANEL_INPUTS, edgeLanes, planSpaceMembers, planSupply, spaceDescendants, spacePath, supplyDownstream, supplyUpstream,
+  MAX_PANEL_INPUTS, edgeLanes, planSpaceMembers, planSupply, spaceDescendants, spacePath, spacesCsvRows, supplyCsvRows, supplyDownstream, supplyUpstream,
   wouldCreateSpaceCycle, wouldCreateSupplyCycle,
   type BlockReason, type DesignIssue, type DropPlan, type HierarchyKind, type SupplySlot,
 } from '@repnode/shared';
@@ -29,7 +29,7 @@ import {
 } from '../lib/hierarchy-editor';
 import { layoutGraph, portX, type LayoutEdge, type LayoutNode } from '../lib/hierarchy-layout';
 import { useMeterDrag } from '../lib/use-meter-drag';
-import { formatNumber } from '../lib/util';
+import { downloadCsv, formatNumber } from '../lib/util';
 import { useCatalogStore } from '../stores/catalog';
 import { panelToSave, placeMeter, spaceToSave, useHierarchyStore } from '../stores/hierarchy';
 import { useToastStore } from '../stores/toast';
@@ -86,6 +86,17 @@ async function run(fn: () => Promise<unknown>, ok?: string): Promise<boolean> {
     toast.error(e);
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Descarga de la jerarquía como CSV (una fila por lugar de cada medidor)
+// ---------------------------------------------------------------------------
+function downloadHierarchyCsv(): void {
+  const d = new Date();
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}`;
+  if (kind.value === 'supply') downloadCsv(`suministro-${stamp}.csv`, supplyCsvRows(h.panels, h.spaces, catalog.sources));
+  else downloadCsv(`comercial-${stamp}.csv`, spacesCsvRows(h.spaces, h.panels, catalog.sources));
 }
 
 // ---------------------------------------------------------------------------
@@ -792,6 +803,13 @@ const selectedIssues = computed(() => (selected.value ? (issuesByNode.value.get(
             <button class="btn btn-sm" title="Ir"><Icon name="target" :size="12" /></button>
           </form>
           <button class="btn btn-sm" :disabled="!nodes.length" title="Recalcula la posición de todas las cajas" @click="reorganize"><Icon name="grid" :size="12" /> Reorganizar</button>
+          <button
+            class="btn btn-sm"
+            :title="kind === 'supply'
+              ? 'Tabla con una fila por cada lugar de cada medidor: entradas, totalizadores, salidas y alimentadores (una fila por destino), más los sin ubicar'
+              : 'Tabla con una fila por medidor de cada espacio, los espacios vacíos y los medidores sin ubicar'"
+            @click="downloadHierarchyCsv"
+          ><Icon name="download" :size="12" /> Descargar CSV</button>
           <span v-if="layingOut" class="flex items-center gap-1 text-xs text-slate-400"><Icon name="refresh" :size="12" class="animate-spin" /> Ordenando…</span>
           <template v-if="selectedEdge">
             <span class="ml-auto truncate text-xs text-slate-600">{{ edgeLabel }}</span>

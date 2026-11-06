@@ -245,7 +245,7 @@ describe('derivación: una salida alimenta a varios tableros', () => {
   it('el tablero de origen avisa la derivación con sus destinos', () => {
     const issues = diagnoseSupply(derivation(), (id) => `M${id}`).filter((i) => i.kind === 'shared_feeder');
     expect(issues).toEqual([
-      { severity: 'warning', kind: 'shared_feeder', nodeId: 1, message: 'M201 alimenta una derivación (TGSN-A · E1, TGSN-B · E1, TGSN-C · E2): mide la suma, no cada entrada por separado' },
+      { severity: 'warning', kind: 'shared_feeder', nodeId: 1, sourceId: 201, message: 'M201 alimenta una derivación (TGSN-A · E1, TGSN-B · E1, TGSN-C · E2): mide la suma, no cada entrada por separado' },
     ]);
   });
 

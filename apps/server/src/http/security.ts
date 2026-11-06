@@ -129,7 +129,10 @@ export function registerSecurity(app: FastifyInstance, { runtime, registry, pme 
   app.addHook('onRequest', async (req, reply) => {
     // Solo se aceptan los nombres de host esperados (protege contra DNS rebinding)
     if (!isAllowedHost(req.headers.host, runtime.allowedHosts)) {
-      return deny(reply, 403, 'forbidden', 'Host no permitido');
+      // Se informa el nombre recibido para saber qué agregar a REPNODE_ALLOWED_HOSTS
+      const host = hostName(req.headers.host).slice(0, 255);
+      req.log.warn({ host }, 'Host no permitido (agrégalo a REPNODE_ALLOWED_HOSTS si es legítimo)');
+      return deny(reply, 403, 'forbidden', `Host no permitido: ${host || '(vacío)'}. Agrégalo a REPNODE_ALLOWED_HOSTS si es un nombre legítimo del servidor.`);
     }
     if (!req.url.startsWith(API_PREFIX)) return;
 

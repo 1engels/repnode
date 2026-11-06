@@ -424,6 +424,8 @@ export interface DesignIssue {
   nodeId: number;
   /** Índice de la entrada, si el problema es de una entrada */
   inputIndex?: number;
+  /** Medidor, si el problema es de un medidor (derivación) */
+  sourceId?: number;
   message: string;
 }
 
@@ -456,7 +458,10 @@ export function diagnoseSupply(panels: readonly PanelLike[], meterName: (sourceI
     for (const [sid, pl] of shared) {
       if (pl.panelId !== p.id) continue;
       const to = pl.feeds!.map((f) => `${byId.get(f.panelId)?.name ?? '¿?'} · E${f.inputIndex + 1}`).join(', ');
-      issue('warning', 'shared_feeder', `${meterName(sid)} alimenta una derivación (${to}): mide la suma, no cada entrada por separado`);
+      out.push({
+        severity: 'warning', kind: 'shared_feeder', nodeId: p.id, sourceId: sid,
+        message: `${meterName(sid)} alimenta una derivación (${to}): mide la suma, no cada entrada por separado`,
+      });
     }
   }
   return out;

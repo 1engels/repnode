@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
+  Lo aplica deploy/iis/publicar-repnode.ps1 (recomendado: sin editar XML a mano). Este archivo queda como referencia.
+
   Regla de proxy inverso para publicar RepNode dentro del sitio de PME: https://<servidor>/repnode/ → http://127.0.0.1:3210/repnode/
   Mismo origen que PME: el navegador envía la cookie de sesión de PME a RepNode y el iframe no es contenido de terceros.
 

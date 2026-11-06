@@ -98,8 +98,13 @@ propio pool; la conexión manual y las conexiones recordadas quedan desactivadas
    curl.exe -s -i -H "Cookie: .APPLICATIONFRAMEWORK=VALOR" http://127.0.0.1/repnode-auth/whoami.ashx
    ```
    Debe responder 200 con tu usuario. Luego cierra esa sesión de PME (la cookie copiada deja de servir).
-4. **IIS**: agregar la regla de [`deploy/iis/web.config.example`](deploy/iis/web.config.example) al `web.config`
-   raíz del sitio (sin reemplazarlo) y ejecutar los dos comandos `appcmd` que indica (activan el proxy de ARR).
+4. **IIS**: con RepNode corriendo, como administrador desde `deploy\iis`:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\publicar-repnode.ps1
+   ```
+   Respalda el `web.config` raíz, activa el proxy de ARR, agrega las reglas de
+   [`web.config.example`](deploy/iis/web.config.example) con los comandos de IIS (sin editar XML a mano) y prueba que
+   `https://127.0.0.1/repnode/api/session` responda 401. `-Quitar` lo deshace.
 5. **Servicio**: ejecutar `pnpm start` como tarea o servicio de Windows que arranque con el equipo, con una cuenta de
    bajo privilegio que pueda leer y escribir solo la carpeta `data/` (contiene `master.key` y `app.db`). Por ejemplo,
    con el Programador de tareas ("Al iniciar el sistema", "Reiniciar si se produce un error").
