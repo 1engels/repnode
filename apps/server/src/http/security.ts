@@ -55,7 +55,7 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  "img-src 'self' data: blob: https://d1bkrjcva2ouq1.cloudfront.net", // logo de PTSYS en el encabezado
   "font-src 'self' data:",
   "connect-src 'self'",
   "worker-src 'self' blob:",

@@ -213,7 +213,7 @@ hacer `EXEC` de los SP; si reciben el error 229 (sin permiso), ejecutan el cuerp
     host permitido; sin esos encabezados no es un navegador y se acepta), luego la sesión (5.2) y, en modo pme, la
     autenticación (5.12).
   - `onSend`: CSP (`frame-ancestors 'self'`, `script-src 'self'`, `style-src 'self' 'unsafe-inline'` por Vue Flow,
-    `worker-src 'self' blob:` por elkjs), `nosniff`, `Referrer-Policy`, HSTS si es https y `no-store` en la API.
+    `img-src` con el host de CloudFront del logo de PTSYS del encabezado, `worker-src 'self' blob:` por elkjs), `nosniff`, `Referrer-Policy`, HSTS si es https y `no-store` en la API.
 - Un archivo que no existe bajo `/repnode/` (p. ej. un asset) responde 404; el resto de rutas de la SPA, `index.html`.
   `@fastify/static` va con `wildcard: false`: los archivos de `dist` se registran al arrancar, así que **tras
   `pnpm build` hay que reiniciar el servidor**.
@@ -680,6 +680,9 @@ queda aislado. La regla `^repnode(/.*)?$` no captura `/repnode-auth`. Hallazgos 
 - **SettingsView**: workers, consultas por worker (muestra el total de conexiones), timeout, TTL, READ UNCOMMITTED y
   refresco del catálogo.
 - Las etiquetas de formato salen de `FORMAT_LABELS` (shared).
+- **Encabezado** (`App.vue`, alto fijo `h-14`): logo y nombre de RepNode, separador y el logo de la marca PTSYS
+  (imagen remota de CloudFront, `h-7 w-auto`, enlaza a https://ptsys.com.pe en otra pestaña). Si cambia el host de la
+  imagen, actualizar también `img-src` en `http/security.ts`.
 - Estilos: Tailwind v4 con `@theme` (colores `brand-*`) y clases propias en `@layer components` (`.card`, `.btn`,
   `.btn-primary`, `.input`, `.label`, `.chip`, `.checkbox`). Los toasts van en `bottom-20` para no tapar la barra fija.
 - Íconos: `Icon.vue` con paths SVG propios; para agregar uno, extender el mapa `paths`.

@@ -59,6 +59,10 @@ async function disconnect() {
           <span>RepNode</span>
           <span class="hidden text-sm font-normal text-slate-500 sm:inline"></span>
         </RouterLink>
+        <span class="h-6 w-px bg-slate-200" aria-hidden="true" />
+        <a href="https://ptsys.com.pe" target="_blank" rel="noopener noreferrer" title="PTSYS" class="flex items-center">
+          <img src="https://d1bkrjcva2ouq1.cloudfront.net/ptsys-site/img/logo.small.png" alt="PTSYS" class="h-7 w-auto" />
+        </a>
         <nav v-if="session.connected" class="ml-4 flex items-center gap-1 text-sm">
           <RouterLink to="/reports" class="rounded-md px-3 py-1.5 text-slate-600 hover:bg-slate-100" active-class="!bg-brand-50 !text-brand-700 font-medium">Reportes</RouterLink>
           <RouterLink to="/tags" class="rounded-md px-3 py-1.5 text-slate-600 hover:bg-slate-100" active-class="!bg-brand-50 !text-brand-700 font-medium">Tags</RouterLink>
