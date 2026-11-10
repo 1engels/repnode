@@ -475,7 +475,8 @@ Códigos de error frecuentes: `not_connected` (409), `not_authenticated` (401, m
 
 Despliegue: RepNode en el servidor de PME escuchando en 127.0.0.1:3210; el IIS de PME (URL Rewrite + ARR, regla en
 `deploy/iis/web.config.example`) publica `https://<servidor>/repnode/` → `http://127.0.0.1:3210/repnode/`, con
-`X-Forwarded-Proto: https`, Host conservado, búfer de respuesta 0 (SSE) y sin compresión dinámica en `/repnode`.
+`X-Forwarded-Proto: https`, Host conservado, búfer de respuesta 0 y sin compresión dinámica en `/repnode`. Aun así los
+eventos SSE no llegan al navegador a través de ese IIS: la GUI usa el respaldo por consulta (ver 6, Jobs).
 Mismo origen que PME: no hay cookies de terceros, `SameSite=Strict` funciona dentro del iframe y el `localStorage` no
 queda aislado. La regla `^repnode(/.*)?$` no captura `/repnode-auth`. Hallazgos del servidor de PME (13.2, IIS 10): Forms Authentication de ASP.NET con la cookie
 `.APPLICATIONFRAMEWORK` (`Path=/`, HttpOnly, Secure) y `machineKey` compartido por sus aplicaciones; el iframe de PME
@@ -588,7 +589,10 @@ queda aislado. La regla `^repnode(/.*)?$` no captura `/repnode-auth`. Hallazgos 
     **Generar de todas formas** (`canForce`; pide `confirm()` y relanza el job con `force: true`).
   - Se abre solo cuando aparece un error nuevo estando en los pasos 3 o 4.
 - **Jobs** (`useJobRunner`): `POST /api/jobs` → `EventSource` → al llegar `done`, la descarga se dispara con un `<a download>`
-  oculto. **JobProgressModal** muestra avance, filas, tamaño, tiempo, ETA, Cancelar y "Descargar de nuevo", más avisos si se
+  oculto. **Respaldo por consulta**: si en 3 s no llega ni el primer evento SSE, consulta `GET /api/jobs/:id` cada 2 s
+  (y una vez más tras Cancelar). En el IIS + ARR de PME `/events` queda *Pending* con 0 bytes aunque el proxy tenga
+  `responseBufferLimit = 0`: sin este respaldo el modal no avanzaba, no descargaba y Cancelar parecía no responder,
+  pese a que el job terminaba bien. `downloadedId` evita descargar dos veces. **JobProgressModal** muestra avance, filas, tamaño, tiempo, ETA, Cancelar y "Descargar de nuevo", más avisos si se
   generó con faltantes (`forced`) o hubo filas fuera de la grilla (`offGridRows`). En cola muestra cuántos reportes hay
   antes (`queuePosition`). Un 422 abre el modal de validación. El historial muestra "por <usuario>" en modo pme.
 - **TagsView** (`/tags`): configuración de tags fuera del flujo de reportes.
@@ -763,3 +767,17 @@ epoch **no mejoraron**, ya se probaron. El costo actual por fila ronda 2,5 µs, 
 configuración, decisiones de rendimiento o hallazgos sobre la BD de PME), **actualiza este AGENTS.md en el mismo
 cambio**, para que siga siendo una fuente fiel. Si algo de lo descrito aquí deja de ser cierto, corrígelo o elimínalo;
 no dejes información obsoleta.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+
+Rules:
+- When graphify-out/graph.json exists, run `graphify query "<question>"` before your first grep, search or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- A committed graphify-out/graph.json is rewritten whole on every build, so a large diff to it in a pull request is expected. Do not flag it as churn or suggest skipping the graph rebuild or its hooks.
