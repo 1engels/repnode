@@ -155,6 +155,15 @@ const migrations: string[] = [
   `
   ALTER TABLE job_history ADD COLUMN user_name TEXT;
   `,
+  // v8: mediciones favoritas por usuario (ownerKey: 'local' o 'pme:<usuario>'), guardadas por Quantity.Name
+  `
+  CREATE TABLE favorite_quantities (
+    profile_id TEXT NOT NULL,
+    user_key TEXT NOT NULL,
+    quantity_name TEXT NOT NULL,
+    PRIMARY KEY (profile_id, user_key, quantity_name)
+  );
+  `,
 ];
 
 function migrate(): void {
@@ -587,6 +596,21 @@ export const presets = {
   },
   remove(profileId: string, id: number): boolean {
     return db.prepare('DELETE FROM measurement_presets WHERE id = ? AND profile_id = ?').run(id, profileId).changes > 0;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Mediciones favoritas (por perfil y usuario, guardadas por Quantity.Name)
+// ---------------------------------------------------------------------------
+
+export const favoriteQuantities = {
+  list(profileId: string, userKey: string): string[] {
+    const rows = db.prepare('SELECT quantity_name FROM favorite_quantities WHERE profile_id = ? AND user_key = ?').all(profileId, userKey) as unknown as { quantity_name: string }[];
+    return rows.map((r) => r.quantity_name);
+  },
+  set(profileId: string, userKey: string, quantityName: string, favorite: boolean): void {
+    if (favorite) db.prepare('INSERT OR IGNORE INTO favorite_quantities (profile_id, user_key, quantity_name) VALUES (?, ?, ?)').run(profileId, userKey, quantityName);
+    else db.prepare('DELETE FROM favorite_quantities WHERE profile_id = ? AND user_key = ? AND quantity_name = ?').run(profileId, userKey, quantityName);
   },
 };
 

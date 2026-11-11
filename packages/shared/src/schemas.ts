@@ -287,6 +287,12 @@ export const presetInputSchema = z.object({
   quantityIds: z.array(z.number().int()).min(1),
 });
 
+/** Marca o desmarca una medición como favorita del usuario. */
+export const favoriteQuantitySchema = z.object({
+  quantityId: z.number().int(),
+  favorite: z.boolean(),
+});
+
 export const settingsSchema = z.object({
   workers: z.number().int().min(1).max(16),
   concurrency: z.number().int().min(1).max(32),

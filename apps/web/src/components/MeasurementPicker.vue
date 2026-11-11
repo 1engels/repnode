@@ -19,6 +19,7 @@ const toast = useToastStore();
 
 const query = ref('');
 const showAll = ref(false);
+const onlyFavorites = ref(false);
 const presetName = ref('');
 const presetToApply = ref<number | ''>('');
 
@@ -40,7 +41,7 @@ const available = computed<QuantityDTO[]>(() => {
   const cov = coverage.value;
   const noMeters = props.meterIds.length === 0;
   return catalog.quantities
-    .filter((q) => (showAll.value || noMeters || cov.has(q.id)) && match(normalize(`${q.name} ${q.unit ?? ''}`)))
+    .filter((q) => (!onlyFavorites.value || catalog.favoriteQuantityIds.has(q.id)) && (showAll.value || noMeters || cov.has(q.id)) && match(normalize(`${q.name} ${q.unit ?? ''}`)))
     .sort((a, b) => (cov.get(b.id) ?? 0) - (cov.get(a.id) ?? 0) || a.name.localeCompare(b.name, 'es', { numeric: true }));
 });
 
@@ -49,6 +50,10 @@ const virt = useVirtualizer(computed(() => ({ count: available.value.length, get
 
 function toggle(id: number) {
   quantityIds.value = selectedSet.value.has(id) ? quantityIds.value.filter((q) => q !== id) : [...quantityIds.value, id];
+}
+
+function toggleFavorite(id: number) {
+  catalog.toggleFavoriteQuantity(id).catch((e) => toast.error(e));
 }
 
 function move(index: number, delta: number) {
@@ -106,15 +111,20 @@ async function deletePreset() {
           <Icon name="search" class="absolute top-2.5 left-3 text-slate-400" />
           <input v-model="query" class="input pl-9" placeholder="Buscar medición o unidad… (p. ej. «kwh del»)" />
         </div>
-        <label class="flex items-center gap-1.5 text-xs text-slate-600">
-          <input v-model="showAll" type="checkbox" class="checkbox" /> Mostrar también mediciones que ningún medidor elegido registra
-        </label>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <label class="flex items-center gap-1.5 text-xs text-slate-600">
+            <input v-model="onlyFavorites" type="checkbox" class="checkbox" /> Solo favoritas ({{ formatNumber(catalog.favoriteQuantityIds.size) }})
+          </label>
+          <label class="flex items-center gap-1.5 text-xs text-slate-600">
+            <input v-model="showAll" type="checkbox" class="checkbox" /> Mostrar también mediciones que ningún medidor elegido registra
+          </label>
+        </div>
         <p v-if="meterIds.length" class="text-xs text-slate-500">
           La etiqueta indica cuántos de los {{ formatNumber(meterIds.length) }} medidores elegidos registran la medición.
         </p>
       </header>
       <div ref="listEl" class="h-[440px] overflow-auto">
-        <p v-if="!available.length" class="p-6 text-center text-sm text-slate-500">Sin coincidencias</p>
+        <p v-if="!available.length" class="p-6 text-center text-sm text-slate-500">{{ onlyFavorites && !catalog.favoriteQuantityIds.size ? 'Aún no tienes mediciones favoritas: márcalas con la estrella' : 'Sin coincidencias' }}</p>
         <div :style="{ height: virt.getTotalSize() + 'px', position: 'relative' }">
           <div
             v-for="row in virt.getVirtualItems()"
@@ -130,6 +140,16 @@ async function deletePreset() {
             <span v-if="meterIds.length" class="chip" :class="coverageClass(available[row.index].id)">
               {{ coverage.get(available[row.index].id) ?? 0 }}/{{ meterIds.length }}
             </span>
+            <button
+              type="button"
+              class="-mr-1 rounded p-1 hover:bg-slate-100"
+              :class="catalog.favoriteQuantityIds.has(available[row.index].id) ? 'text-brand-600' : 'text-slate-300 hover:text-slate-500'"
+              :title="catalog.favoriteQuantityIds.has(available[row.index].id) ? 'Quitar de favoritas' : 'Marcar como favorita'"
+              :aria-pressed="catalog.favoriteQuantityIds.has(available[row.index].id)"
+              @click.stop="toggleFavorite(available[row.index].id)"
+            >
+              <Icon name="star" :filled="catalog.favoriteQuantityIds.has(available[row.index].id)" />
+            </button>
           </div>
         </div>
       </div>

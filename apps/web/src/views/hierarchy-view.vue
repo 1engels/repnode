@@ -9,6 +9,8 @@ import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
 import '@vue-flow/controls/dist/style.css';
 import '@vue-flow/minimap/dist/style.css';
+import { IconLayoutSidebarRightCollapse, IconLayoutSidebarRightExpand } from '@tabler/icons-vue';
+import { useLocalStorage } from '@vueuse/core';
 import {
   MAX_PANEL_INPUTS, edgeLanes, planSpaceMembers, planSupply, spaceDescendants, spacePath, spacesCsvRows, supplyCsvRows, supplyDownstream, supplyUpstream,
   wouldCreateSpaceCycle, wouldCreateSupplyCycle,
@@ -758,6 +760,9 @@ async function createQuick() {
   }, `${kind.value === 'supply' ? 'Tablero' : 'Espacio'} «${name}» creado${q.ids.length ? ` con ${formatNumber(quickPlan.value?.assign.length ?? q.ids.length)} medidor(es)` : ''}`);
 }
 
+/** Columna derecha (detalle y problemas) visible; se oculta para dar más espacio al lienzo. Se recuerda por navegador. */
+const detailOpen = useLocalStorage('repnode.hierarchy.detailOpen', true);
+
 const selectedIssues = computed(() => (selected.value ? (issuesByNode.value.get(parseId(selected.value)) ?? []) : []));
 </script>
 
@@ -790,7 +795,7 @@ const selectedIssues = computed(() => (selected.value ? (issuesByNode.value.get(
       </div>
     </div>
 
-    <div class="grid min-h-0 flex-1 gap-3 lg:grid-cols-[280px_minmax(0,1fr)_420px]">
+    <div class="grid min-h-0 flex-1 gap-3" :class="detailOpen ? 'lg:grid-cols-[280px_minmax(0,1fr)_420px]' : 'lg:grid-cols-[280px_minmax(0,1fr)]'">
       <HierarchyMeterList v-model:selected="listSelected" :kind="kind" @focus="focusMeter = $event" @locate="locateMeter" @unassign="unassign" />
 
       <!-- Lienzo -->
@@ -815,6 +820,20 @@ const selectedIssues = computed(() => (selected.value ? (issuesByNode.value.get(
             <span class="ml-auto truncate text-xs text-slate-600">{{ edgeLabel }}</span>
             <button class="btn btn-danger btn-sm" title="Supr" @click="disconnect"><Icon name="x" :size="12" /> Desconectar</button>
           </template>
+          <button
+            class="btn btn-sm relative px-2"
+            :class="!selectedEdge && 'ml-auto'"
+            :title="detailOpen ? 'Ocultar el panel de detalle y problemas' : 'Mostrar el panel de detalle y problemas'"
+            :aria-expanded="detailOpen"
+            @click="detailOpen = !detailOpen"
+          >
+            <component :is="detailOpen ? IconLayoutSidebarRightCollapse : IconLayoutSidebarRightExpand" :size="16" :stroke-width="1.75" />
+            <span
+              v-if="!detailOpen && (selected || issues.length)"
+              class="absolute -top-1 -right-1 size-2.5 rounded-full ring-2 ring-white"
+              :class="issues.some((i) => i.severity === 'error') ? 'bg-red-600' : issues.length ? 'bg-amber-500' : 'bg-brand-600'"
+            />
+          </button>
         </div>
 
         <div
@@ -882,7 +901,7 @@ const selectedIssues = computed(() => (selected.value ? (issuesByNode.value.get(
       </section>
 
       <!-- Detalle y problemas -->
-      <aside class="flex min-h-0 flex-col gap-3">
+      <aside v-show="detailOpen" class="flex min-h-0 flex-col gap-3">
         <section class="card min-h-0 flex-1 overflow-auto p-4">
           <PanelDetail
             v-if="selected?.startsWith('p:') && h.panelById.has(parseId(selected))"

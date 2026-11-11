@@ -279,6 +279,9 @@ Migraciones versionadas con `PRAGMA user_version`; para cambiar el esquema, **ag
 - `tag_colors` (migración v2): paleta personalizada de colores por perfil (máx. 24, los más recientes primero). Un tag
   creado o editado con un color fuera de `TAG_PALETTE` (shared, 8 colores base) agrega ese color automáticamente.
 - `measurement_presets`: guarda **nombres** de Quantity en JSON y los resuelve a IDs con el catálogo.
+- `favorite_quantities` (migración v8): mediciones favoritas **por usuario**, clave `(profile_id, user_key,
+  quantity_name)`; `user_key` = `ownerKey(sesión)` (`local` o `pme:<usuario>`). Se guardan por Quantity.Name y se
+  resuelven a IDs con el catálogo (las que ya no existen se omiten).
 - `reports`: `definition_json` validado con `reportDefinitionSchema`. Todo va por perfil. Al leerlo se vuelve a pasar por
   el esquema (`parseDefinition`) para completar campos nuevos con su valor por defecto (p. ej. `panelIds`, `spaceIds`).
 - Jerarquías (migraciones v4 y v5), miembros por **`Source.Name`** como los tags y **un lugar por medidor y por
@@ -452,6 +455,7 @@ Todas las rutas van bajo `/repnode` (p. ej. `GET /repnode/api/session`); la tabl
 | `GET/POST /api/tags`, `PUT/DELETE /api/tags/:id`, `POST /api/tags/:id/members` | Tags (`{sourceIds, action:'add'|'remove'}`); `POST` acepta `sourceIds` iniciales; cada operación devuelve la lista completa |
 | `GET/POST /api/tag-colors`, `DELETE /api/tag-colors/:hex` | Paleta personalizada (`{color:'#rrggbb'}`; en el DELETE, el hex va sin `#`); devuelven la lista |
 | `GET/POST /api/presets`, `DELETE /api/presets/:id` | Presets de mediciones (POST hace upsert por nombre) |
+| `GET/POST /api/favorite-quantities` | Mediciones favoritas del usuario de la sesión (`number[]` de quantityIds). POST `{quantityId, favorite}` marca o desmarca y devuelve la lista; 404 si la medición no está en el catálogo |
 | `GET /api/hierarchy` | `{panels, spaces}` con medidores resueltos a IDs (`missing`/`missingMeter` = guardados que ya no existen). Todas las rutas de jerarquías devuelven este objeto completo |
 | `POST /api/panels`, `PUT/DELETE /api/panels/:id` | Tablero (`name`, `mode`, `description`, `inputs[]` = reemplazo completo, `totalizerSourceId`, `color`, `icon`). `POST` acepta `sourceIds` (salidas iniciales) y `x`/`y`. 400 `cycle`, 409 `duplicate`, 409 `meter_in_use` |
 | `POST /api/panels/:id/loads` | Salidas `{sourceIds, action:'add'|'remove'}`; agregar mueve desde otro lugar libre; quitar deja sin medidor las entradas que alimentaba. Entrada externa/totalizador de otro tablero o salida que alimenta a otro → 409 `meter_in_use` |
@@ -573,6 +577,10 @@ queda aislado. La regla `^repnode(/.*)?$` no captura `/repnode-auth`. Hallazgos 
        **Editar jerarquías** abre `/hierarchy` en otra pestaña.
   2. **MeasurementPicker**: muestra solo las mediciones de los medidores elegidos, con cobertura `n/N` (verde, ámbar o
      rojo); búsqueda; presets (usar, sumar, guardar, eliminar). **El orden de la lista es el orden de las columnas.**
+     Cada fila de "Mediciones disponibles" tiene una **estrella de favorito** (contorno = no marcada, relleno azul =
+     marcada; `Icon` con `filled`) y la casilla "Solo favoritas (N)" filtra la lista. Las favoritas viven en
+     `catalog.favoriteQuantityIds` (se cargan con el catálogo); `toggleFavoriteQuantity` cambia al instante y revierte si
+     el servidor falla.
   3. **DateRangeEditor**: rango fijo (`datetime-local` más atajos) o relativo; zona IANA con datalist; muestra la
      consulta en UTC.
   4. **OutputEditor**: formato (Ancho, Largo, ZIP por medidor, Por estampa de tiempo; este último con la casilla
@@ -627,6 +635,11 @@ queda aislado. La regla `^repnode(/.*)?$` no captura `/repnode-auth`. Hallazgos 
       (entrada, totalizador o derivación) y problemas del tablero (repetidos en todas sus filas).
     - Comercial (`spacesCsvRows`): una fila por medidor de cada espacio (orden de árbol), una por espacio vacío y los
       sin ubicar al final, con su tablero y rol en Suministro (`SPACES_CSV_COLUMNS`).
+  - **Columnas colapsables**: en la lista de medidores, `MeterFilterBar` va con `collapsible`: solo se ve la búsqueda y
+    un botón de filtro (con punto azul si hay filtros activos ocultos) muestra u oculta los selects. La columna
+    derecha (detalle + problemas) se oculta con el botón del extremo derecho de la barra del lienzo (íconos
+    `IconLayoutSidebarRight*` de tabler; punto de color si hay selección o problemas); el estado se recuerda en
+    `localStorage` `repnode.hierarchy.detailOpen`.
   - Cajas: `panel-node` (encabezado con el **ícono** del tablero a la izquierda y su **color** al 50 % de opacidad,
     sufijo alfa `80`; terminales de entrada arriba como *handles* `in-0…in-N` + `in-new`; zona **Σ Totalizador**
     con su medidor y la fórmula "= E1 + E2" o "activa: E1 | E2"; **Salidas** (`panelOutputs` de shared): una fila por

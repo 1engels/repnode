@@ -23,6 +23,8 @@ export const useCatalogStore = defineStore('catalog', () => {
   const tags = ref<TagDTO[]>([]);
   const tagColors = ref<string[]>([]);
   const presets = ref<PresetDTO[]>([]);
+  /** Mediciones favoritas del usuario actual (se guardan en el servidor por usuario). */
+  const favoriteQuantityIds = ref<Set<number>>(new Set());
   const loading = ref(false);
 
   // En la GUI los medidores se listan por GRUPO.MEDIDOR (Source.Name)
@@ -66,11 +68,12 @@ export const useCatalogStore = defineStore('catalog', () => {
     if (catalog.value && !force) return;
     loading.value = true;
     try {
-      const [c, t, colors, p] = await Promise.all([
+      const [c, t, colors, p, fav] = await Promise.all([
         force ? post<CatalogDTO>('/api/catalog/refresh') : get<CatalogDTO>('/api/catalog'),
         get<TagDTO[]>('/api/tags'),
         get<string[]>('/api/tag-colors'),
         get<PresetDTO[]>('/api/presets'),
+        get<number[]>('/api/favorite-quantities'),
       ]);
       // Con el catálogo nuevo cambian los IDs resueltos de las jerarquías
       await useHierarchyStore().load();
@@ -78,6 +81,7 @@ export const useCatalogStore = defineStore('catalog', () => {
       setTags(t);
       tagColors.value = colors;
       presets.value = p;
+      favoriteQuantityIds.value = new Set(fav);
     } finally {
       loading.value = false;
     }
@@ -89,6 +93,7 @@ export const useCatalogStore = defineStore('catalog', () => {
     setTags([]);
     tagColors.value = [];
     presets.value = [];
+    favoriteQuantityIds.value = new Set();
   }
 
   /** Medidores efectivos: selección directa + tags dinámicos + nodos dinámicos de las jerarquías, en orden del catálogo. */
@@ -149,11 +154,28 @@ export const useCatalogStore = defineStore('catalog', () => {
 
   // Presets
   const savePreset = async (name: string, quantityIds: number[]) => (presets.value = await post<PresetDTO[]>('/api/presets', { name, quantityIds }));
+  /** Marca o desmarca una favorita; se refleja al instante y se revierte si falla. */
+  async function toggleFavoriteQuantity(id: number): Promise<void> {
+    const favorite = !favoriteQuantityIds.value.has(id);
+    const next = new Set(favoriteQuantityIds.value);
+    if (favorite) next.add(id);
+    else next.delete(id);
+    favoriteQuantityIds.value = next;
+    try {
+      favoriteQuantityIds.value = new Set(await post<number[]>('/api/favorite-quantities', { quantityId: id, favorite }));
+    } catch (e) {
+      const back = new Set(favoriteQuantityIds.value);
+      if (favorite) back.delete(id);
+      else back.add(id);
+      favoriteQuantityIds.value = back;
+      throw e;
+    }
+  }
   const deletePreset = async (id: number) => (presets.value = await del<PresetDTO[]>(`/api/presets/${id}`));
 
   return {
     catalog, tags, tagColors, presets, loading, sources, sourceById, quantities, quantityById, sourceQuantities, groups, models, tagById,
     tagsBySource, load, reset, effectiveSourceIds, reloadTags, createTag, updateTag, deleteTag, setTagMembers, addTagColor, deleteTagColor,
-    savePreset, deletePreset,
+    savePreset, deletePreset, favoriteQuantityIds, toggleFavoriteQuantity,
   };
 });

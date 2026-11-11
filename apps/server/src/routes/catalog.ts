@@ -1,13 +1,14 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
-  presetInputSchema, settingsSchema, TAG_PALETTE, tagColorSchema, tagCreateSchema, tagInputSchema, tagMembersSchema,
+  favoriteQuantitySchema, presetInputSchema, settingsSchema, TAG_PALETTE, tagColorSchema, tagCreateSchema, tagInputSchema, tagMembersSchema,
   type PresetDTO, type TagDTO,
 } from '@repnode/shared';
 import { HttpError } from '../errors.ts';
 import { catalogToDTO } from '../mssql/catalog.ts';
 import { refreshCatalog, requireSession } from '../mssql/session.ts';
-import { presets, settings, tagColors, tags } from '../store/sqlite.ts';
+import { ownerKey } from '../sessions/registry.ts';
+import { favoriteQuantities, presets, settings, tagColors, tags } from '../store/sqlite.ts';
 import { clearValidationCache } from '../validate.ts';
 
 const idParam = z.object({ id: z.coerce.number().int() });
@@ -141,6 +142,28 @@ export default async function catalogRoutes(app: FastifyInstance) {
     const { id } = idParam.parse(req.params);
     presets.remove(s.profileId, id);
     return listPresets(req);
+  });
+
+  // -------------------------------------------------------------------------
+  // Mediciones favoritas (de cada usuario): devuelven los IDs presentes en el catálogo
+  // -------------------------------------------------------------------------
+  function listFavorites(req: FastifyRequest): number[] {
+    const s = requireSession(req);
+    return favoriteQuantities
+      .list(s.profileId, ownerKey(req.userSession!))
+      .map((n) => s.catalog.quantityByName.get(n)?.id)
+      .filter((id): id is number => id != null);
+  }
+
+  app.get('/api/favorite-quantities', async (req) => listFavorites(req));
+
+  app.post('/api/favorite-quantities', async (req) => {
+    const s = requireSession(req);
+    const body = favoriteQuantitySchema.parse(req.body);
+    const name = s.catalog.quantityById.get(body.quantityId)?.name;
+    if (!name) throw new HttpError(404, 'Medición no encontrada', 'not_found');
+    favoriteQuantities.set(s.profileId, ownerKey(req.userSession!), name, body.favorite);
+    return listFavorites(req);
   });
 
   // -------------------------------------------------------------------------

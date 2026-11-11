@@ -119,7 +119,7 @@ watch(() => [filters.state.query, filters.state.group, filters.state.model, filt
         <h2 class="font-semibold">Medidores</h2>
         <span class="text-xs text-slate-500">{{ formatNumber(filtered.length) }} de {{ formatNumber(catalog.sources.length) }}</span>
       </div>
-      <MeterFilterBar :state="filters.state" :active="filters.active.value || placement !== 'all'" @clear="filters.clear(); placement = 'all'">
+      <MeterFilterBar collapsible :state="filters.state" :active="filters.active.value || placement !== 'all'" @clear="filters.clear(); placement = 'all'">
         <select v-model="placement" class="input w-auto py-1.5" :class="placement !== 'all' && 'border-brand-500'">
           <option value="all">Todos</option>
           <option value="unassigned">Sin ubicar ({{ formatNumber(unassignedCount) }})</option>
